@@ -11,7 +11,7 @@
 #SBATCH --output=empty_log.log   # Standard output and error log
 #SBATCH --gpus=quadro_rtx_5000:1
 
-conda activate al_env
+conda activate algtg
 
 #lsmlps_gtg lstmreg_gtg lstmbc_gtg
 

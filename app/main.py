@@ -107,7 +107,7 @@ def get_device(args) -> torch.device:
 def main() -> None:
     args = get_args()
     
-    exp_path = f'{os.environ["SLURM_JOB_ID"]}_{os.environ["SLURM_JOB_NAME"]}__{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}'
+    exp_path = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     create_directory(f'results/{exp_path}')
     
     logging.basicConfig(filename = f'results/{exp_path}/exp_log.log',
