@@ -258,12 +258,11 @@ def plot_gtg_entropy_tensor(tensor: torch.Tensor, topk: List[int], lab_unlabels:
 
 
 
-def plot_res_std_mean(task: str, exp_path: str, dataset_name: str) -> None:
-    df = pd.read_csv(f'results/{exp_path}/{dataset_name}/{task}_results.csv')
+def plot_res_std_mean(exp_path: str, dataset_name: str) -> None:
+    df = pd.read_csv(f'results/{exp_path}/{dataset_name}/clf_results.csv')
 
     df_grouped = (
-        df[
-            ['method', 'lab_obs', 'test_accuracy' if task == 'clf' else 'test_map']
+        df[['method', 'lab_obs', 'test_accuracy']
         ].groupby(['method', 'lab_obs']).agg(['mean', 'std', 'count'])
     )
     df_grouped = df_grouped.droplevel(axis=1, level=0).reset_index()
@@ -276,7 +275,7 @@ def plot_res_std_mean(task: str, exp_path: str, dataset_name: str) -> None:
     shapes = ['o', 's', '^', 'D', 'v', 'o', 's', '^', 'D', 'v', 'o', 's', '^', 'D', 'v', 'o', 's', '^', 'D', 'v']
 
     df_grouped = df_grouped.drop(columns=["ci"])
-    df_grouped.to_csv(f'results/{exp_path}/{dataset_name}/mean_std_{task}_results.csv', index=False)
+    df_grouped.to_csv(f'results/{exp_path}/{dataset_name}/mean_std_clf_results.csv', index=False)
 
     lines_handles = []
     palette = get_palette(len(methods))
@@ -293,7 +292,7 @@ def plot_res_std_mean(task: str, exp_path: str, dataset_name: str) -> None:
         
 
     plt.xlabel('labelled Observations', fontsize = 15)
-    plt.ylabel('Test Accuracy' if task == 'clf' else 'Test mAP', fontsize = 15)
+    plt.ylabel('Test Accuracy', fontsize = 15)
     plt.title(f'{dataset_name} results', fontsize = 30)
     plt.legend(handles=lines_handles)
     plt.grid(True)

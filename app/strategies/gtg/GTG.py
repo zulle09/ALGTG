@@ -29,7 +29,8 @@ class GTG(ActiveLearner):
         #self.perc_labelled_batch: int = gtg_p["plb"]
         self.batch_size_gtg_online: int = gtg_p["bsgtgo"]
         self.gtg_model = gtg_p["gtg_model"]
-        if self.model.only_module_name != None: self.model.added_module.define_idx_params(gtg_p["id_am_ts"], gtg_p["id_am"]) # type: ignore # -> for GTG module only
+        if self.model.only_module_name != None: 
+            self.model.added_module.define_idx_params(gtg_p["id_am_ts"], gtg_p["id_am"]) # type: ignore # -> for GTG module only
         
 
 
@@ -103,41 +104,6 @@ class GTG(ActiveLearner):
             
         logger.info(f' => Extracting the Top-k unlabelled observations')
         overall_topk = top_k_pred.tolist()
-        ######################################################
-        #overall_topk = top_k_true.tolist() # -> DEBUB PORPUSE
-        ######################################################
         logger.info(' DONE\n')
             
         return overall_topk, [self.rand_unlab_sample[id] for id in overall_topk]
-        
-        
-    '''def query_llmlp(self, sample_unlab_subset: Subset, n_top_k_obs: int) -> Tuple[List[int], List[int]]:
-        self.unlab_train_dl = DataLoader(sample_unlab_subset, batch_size=self.batch_size, shuffle=False, pin_memory=True)
-                
-        logger.info(' => Evaluating unlabelled observations')
-        embeds_dict = { 'module_out': torch.empty(0, dtype=torch.float32) }
-        
-        self.load_best_checkpoint()
-        
-        self.get_embeddings(self.unlab_train_dl, embeds_dict)
-        
-        logger.info(f' => Extracting the Top-k unlabelled observations')
-        overall_topk = torch.topk(embeds_dict["module_out"], n_top_k_obs).indices.tolist()
-        logger.info(' DONE\n')
-        
-        return overall_topk, [self.rand_unlab_sample[id] for id in overall_topk]'''
-
-
-        #if self.gtg_model == 'llmlp':
-        #    return self.query_llmlp(sample_unlab_subset, n_top_k_obs)
-        #else:
-        
-    '''query_bs = int(self.batch_size * self.perc_labelled_batch)
-            
-            unlab_train_dl = DataLoader(sample_unlab_subset, batch_size=query_bs, shuffle=False, pin_memory=True)
-            labelled_subset = Subset(self.dataset.unlab_train_ds, self.labelled_indices)
-            lab_train_dl = DataLoader(
-                dataset=labelled_subset, batch_size=query_bs,
-                sampler=RandomSampler(labelled_subset, num_samples=len(sample_unlab_subset), replacement=False), 
-                #random sample with replacement, each batch has different set of labelled observation drown ad random from the entire set
-            )'''

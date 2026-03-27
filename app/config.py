@@ -326,13 +326,3 @@ voc_config = {
     'variance': [0.1, 0.2],
     'clip': True,
 }
-
-
-det_config = {
-    'lr_steps': (80000, 100000, 120000),
-    '3s': 300,
-    'batch_size': 32,
-    'results_dict': { 'train': { 'train_loss': [] , 'train_loc_loss': [], 'train_conf_loss': [], 'train_pred_loss': []},
-                     'test': {'test_map': []}
-                    }
-}

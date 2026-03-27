@@ -47,8 +47,7 @@ class LossNet(nn.Module):
         
         self.GAP = []
         for feature_size in feature_sizes:
-            if task == 'detection': self.GAP.append(nn.AdaptiveAvgPool2d((1, 1)))
-            else: self.GAP.append(nn.AvgPool2d(feature_size))
+            self.GAP.append(nn.AvgPool2d(feature_size))
             
         self.GAP = nn.ModuleList(self.GAP)
 

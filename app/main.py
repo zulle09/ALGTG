@@ -2,16 +2,18 @@
 
 import torch
 
+from app.dataset import Cls_Datasets
+
 torch.autograd.set_detect_anomaly(True) # type: ignore
 import torch.distributed as dist
 
 from models.BBone_Module import Master_Model
 
-from init import get_backbone, get_dataset, get_ll_module_params, get_masters, get_strategies_object, dict_backbone
+from init import get_backbone, get_ll_module_params, get_masters, get_strategies_object, dict_backbone
 from utils import create_directory, create_exp_path, plot_trail_acc, plot_res_std_mean, set_seeds, save_yamal
 
     	
-from config import cls_config, al_params, det_config
+from config import cls_config, al_params
 from datetime import datetime
 import argparse
 import time
@@ -30,7 +32,7 @@ def get_args() -> argparse.Namespace:
             'random', 'entropy', 'coreset', 'badge', 'bald', 'cdal', 'tavaal', 'alphamix', 'tidal',
             'll', 'gtg', 'll_gtg', 'llmlp_gtg', 'lsmlps_gtg', 'lsmlpsA_gtg', 'lstmreg_gtg', 'lstmbc_gtg'
         ], help='Possible methods to choose')
-    parser.add_argument('-ds', '--datasets', type=str, nargs='+', required=True, choices=['cifar10', 'cifar100', 'svhn', 'fmnist', 'caltech256', 'tinyimagenet'], #'voc', 'coco'
+    parser.add_argument('-ds', '--datasets', type=str, nargs='+', required=True, choices=['cifar10', 'cifar100', 'svhn', 'fmnist', 'caltech256', 'tinyimagenet'],
                         help='Possible datasets to choose')
     parser.add_argument('-tr', '--trials', type=int, required=False, default=5, help='AL trials')
     parser.add_argument('-bbone', '--bbone_pre_train', required=False, action='store_true', help='BackBone pre-train for GTG Module')
@@ -146,13 +148,9 @@ def main() -> None:
         
     for dataset_name in args.datasets:
         
-        if dataset_name in ['cifar10', 'cifar100', 'svhn', 'caltech256', 'tinyimagenet', 'fmnist']: 
-            task, task_params = 'clf', cls_config
-        else: task, task_params = 'detection', det_config
-
         logger.info(f'----------------------- RUNNING ACTIVE LEARNING BENCHMARK ON {dataset_name} -----------------------\n')
         
-        Dataset = get_dataset(task, dataset_name) # get the dataset
+        Dataset = Cls_Datasets(dataset_name) # get the dataset
         BBone = get_backbone(Dataset.n_classes, Dataset.n_channels, dict_backbone[dataset_name], Dataset.image_size) # the backbone is the same for all
 
         # create gtg dictionary parameters
@@ -162,13 +160,13 @@ def main() -> None:
             device = device
         )
         
-        ll_module_params = get_ll_module_params(task, Dataset.image_size, dataset_name) # create learning loss dictionary parameters
+        ll_module_params = get_ll_module_params(Dataset.image_size, dataset_name) # create learning loss dictionary parameters
             
         Masters = get_masters(args.methods, BBone, ll_module_params, gtg_module_params, dataset_name, Dataset.n_classes) # obtain the master models
                                                 
         common_training_params = {
             'device': device, 'exp_path': exp_path,
-            'dataset_name': dataset_name, 'task': task, 'gpus': args.gpus,
+            'dataset_name': dataset_name, 'gpus': args.gpus,
             'temp_unlab_pool': args.temp_unlab_pool, 'bbone_pre_train': args.bbone_pre_train,
         }
         
@@ -192,20 +190,20 @@ def main() -> None:
                 common_training_params["bbone_init_weights"] = None
 
             results, n_lab_obs = run_strategies(
-                ct_p = {**common_training_params, 'Dataset': Dataset}, t_p = task_params, gtg_p = gtg_params, Masters = Masters, methods = args.methods
+                ct_p = {**common_training_params, 'Dataset': Dataset}, t_p = cls_config, gtg_p = gtg_params, Masters = Masters, methods = args.methods
             )
             
             plot_trail_acc(dataset_name, trial, results, n_lab_obs, exp_path,
-                             list(task_params["results_dict"]["test"].keys())[0],
+                             list(cls_config["results_dict"]["test"].keys())[0],
                              plot_png_name=f'{dataset_name}/{trial}/results.png')
         
-        plot_res_std_mean(task, exp_path, dataset_name)
+        plot_res_std_mean(exp_path, dataset_name)
 
         del common_training_params["trial"]
         # saving yamal configuration file
         save_yamal(
             common_training_params, 
-            {'epochs': task_params['epochs'], 'datasets_optim': task_params[dataset_name]}, 
+            {'epochs': cls_config['epochs'], 'datasets_optim': cls_config[dataset_name]}, 
             al_params, gtg_params, exp_path, dataset_name
         )
             

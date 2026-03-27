@@ -1,7 +1,6 @@
 
-from models.modules.GTG_Cls import GTGModule
+from app.models.modules.GTG.GTG_Cls import GTGModule
 from models.modules.LossNet import LossNet
-#from models.backbones.ssd_pytorch.SSD import SSD, build_ssd
 from models.backbones.ResNet18 import ResNet, ResNet18
 from models.backbones.VGG import VGG, VGG16_bn
 
@@ -20,22 +19,12 @@ from strategies.gtg.GTG_off import GTG_off
 
 from models.BBone_Module import Master_Model
 
-from datasets_creation.Classification import Cls_Datasets
-from datasets_creation.Detection import Det_Dataset
-
-#from config import voc_config
 from typing import Dict, Any, List, Tuple
 
-
-def get_dataset(task: str, dataset_name: str) -> Cls_Datasets | Det_Dataset:
-    if task == 'clf': return Cls_Datasets(dataset_name)
-    else: return Det_Dataset(dataset_name)
-
     
-def get_backbone(n_classes: int, n_channels: int, bbone: str, img_size: int) -> ResNet | VGG:# | SSD:
+def get_backbone(n_classes: int, n_channels: int, bbone: str, img_size: int) -> ResNet | VGG:
     if bbone == 'ResNet': return ResNet18(n_classes=n_classes, n_channels=n_channels, img_size=img_size)
-    else: return VGG16_bn(n_classes=n_classes,  n_channels=n_channels) #bbone == 'VGG':
-    #else: return build_ssd('train', voc_config, num_classes=n_classes)
+    else: return VGG16_bn(n_classes=n_classes,  n_channels=n_channels)
     
 
 def get_module(module: str, module_params: Dict[str, Any] | Tuple[Dict[str, Any], Dict[str, Any]]) -> LossNet | GTGModule:
@@ -43,26 +32,19 @@ def get_module(module: str, module_params: Dict[str, Any] | Tuple[Dict[str, Any]
     else: return GTGModule(module_params)
 
 
-def get_ll_module_params(task: str, image_size: int, dataset_name: str) -> Dict[str, int | str | List[int]]:
-    if task == 'detection':
+def get_ll_module_params(image_size: int, dataset_name: str) -> Dict[str, int | str | List[int]]:
+    if dataset_name != 'caltech256':   
         return dict(
-                    feature_sizes=[512, 1024, 512, 256, 256, 256],
-                    num_channels=[512, 1024, 512, 256, 256, 256],
-                    interm_dim=128, task='detection'
-                )
-    else:
-        if dataset_name != 'caltech256':   
-            return dict(
-                    feature_sizes=[image_size, image_size // 2, image_size // 4, image_size // 8],
-                    num_channels=[64, 128, 256, 512],
-                    interm_dim=128, task='cls'
-                )
-        else: 
-            return dict(
-                    feature_sizes=[224, 224, 112, 56],
-                    num_channels=[64, 64, 128, 256],
-                    interm_dim=128, task='cls'
-                )
+                feature_sizes=[image_size, image_size // 2, image_size // 4, image_size // 8],
+                num_channels=[64, 128, 256, 512],
+                interm_dim=128, task='cls'
+            )
+    else: 
+        return dict(
+                feature_sizes=[224, 224, 112, 56],
+                num_channels=[64, 64, 128, 256],
+                interm_dim=128, task='cls'
+            )
             
             
 
@@ -81,7 +63,7 @@ dict_strategies_GTG = dict(
 
 dict_backbone = dict(
     cifar10 = 'ResNet', cifar100 = 'ResNet', svhn = 'ResNet', fmnist = 'ResNet',
-    caltech256 = 'VGG', tinyimagenet = 'ResNet', voc = 'SSD', coco = 'SSD'
+    caltech256 = 'VGG', tinyimagenet = 'ResNet'
 )
 
 

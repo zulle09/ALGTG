@@ -1,7 +1,6 @@
 
 from models.BBone_Module import Master_Model
-from datasets_creation.Classification import Cls_Datasets
-from datasets_creation.Detection import Det_Dataset
+from app.dataset import Cls_Datasets
 from train_evaluate.Train_DDP import train, train_ddp
 from utils import count_class_observation, plot_cumulative_train_results, set_seeds,\
     create_class_dir, create_method_res_dir, plot_new_labelled_tsne, save_train_val_curves, write_csv,\
@@ -35,7 +34,7 @@ class ActiveLearner():
         self.model: Master_Model = self.ct_p["Master_Model"]
         self.model = self.model.to(self.device)
         
-        self.dataset: Cls_Datasets | Det_Dataset = self.ct_p["Dataset"]
+        self.dataset: Cls_Datasets = self.ct_p["Dataset"]
         
         self.ds_t_p = self.t_p[self.ct_p["dataset_name"]]
         self.batch_size = self.ds_t_p["batch_size"][self.model.only_module_name]
