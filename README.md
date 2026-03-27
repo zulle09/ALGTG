@@ -79,5 +79,10 @@ options:
 
 ```
 
-PS:
-Good luck for those decice to continue this project :)
+### Next step
+- Remove Detection step, focus only on the classificarion;
+- Restructire the code make it more readable, comment everithing;
+- Focus on analysing the problem of why it do not worksm, the online version, whereas the offline verison works fine;
+- Study new strategy, new published papers & researches;
+
+For now that's it I think there is a lot to do, supposing that nobody else has continue this project...I hope s:)s

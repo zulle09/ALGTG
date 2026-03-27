@@ -15,8 +15,8 @@ from strategies.competitors.CDAL import CDAL
 from strategies.competitors.TA_VAAL.TA_VAAL import TA_VAAL
 from strategies.competitors.AlphaMix import AlphaMix
 from strategies.competitors.TiDAL import TiDAL
-from strategies.GTG import GTG
-from strategies.GTG_off import GTG_off
+from strategies.gtg.GTG import GTG
+from strategies.gtg.GTG_off import GTG_off
 
 from models.BBone_Module import Master_Model
 
