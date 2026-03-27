@@ -10,9 +10,9 @@ To this end, the selection of samples to be labeled in our AL model is based on:
 
 ## Requirements
 
-Change the last row of **requirements.txt** to the path of yout conda enviroments. Then type in the bash the following lines.
+Change the last row of **environment.yml** to the path of yout conda enviroments. Then type in the bash the following lines.
 ```
-conda create --name <env> --file requirements.txt
+conda env creaete -f environment.yml
 conda activate <env>
 ```
 
