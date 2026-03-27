@@ -94,8 +94,11 @@ def get_device(args) -> torch.device:
         device = torch.device('cuda')
         if dist.is_available(): logger.info('We can train on multiple GPU')
         if dist.is_nccl_available(): logger.info('NCCL backend available')
+    elif torch.backends.mps.is_available():
+        logger.info('CUDA is not available. Using MPS (MacOS)')
+        device = torch.device('mps')
     else:
-        logger.info('CUDA is not available. Using CPU')
+        logger.info('CUDA and MPS are not available. Using CPU')
         device = torch.device('cpu')
 
     logger.info(f'Application running on {device}\n')
