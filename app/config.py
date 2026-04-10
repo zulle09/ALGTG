@@ -3,7 +3,8 @@ from torchvision import datasets
 from torchvision import transforms
 import torch
 
-
+# This file contains the configuration of the datasets and the training parameters for the classification and detection tasks. 
+# It is used to avoid hardcoding these values in the main code and to make it easier to change them if needed.
 cls_datasets = {
     'cifar10': {
         'id': 1,

@@ -15,11 +15,32 @@ logger = logging.getLogger(__name__)
 class Entropy(ActiveLearner):
     
     def __init__(self, ct_p: Dict[str, Any], t_p: Dict[str, Any]) -> None:
-        
         super().__init__(ct_p, t_p, self.__class__.__name__)
         
         
     def query(self, sample_unlab_subset: Subset, n_top_k_obs: int) -> Tuple[List[int], List[int]]:
+        """
+        Select the top-k most uncertain unlabeled samples for annotation.
+        This method implements an entropy-based active learning query strategy.
+        It computes the entropy of the model's prediction probabilities for the
+        unlabeled samples and selects the ones with the highest entropy, indicating
+        the most uncertainty.
+        Args:
+            sample_unlab_subset (Subset): A subset of unlabeled data to query from.
+            n_top_k_obs (int): The number of top-k observations to select based on
+                highest entropy.
+        Returns:
+            Tuple[List[int], List[int]]: A tuple containing:
+                - List of indices of the top-k unlabeled observations with highest
+                  entropy (most uncertain predictions).
+                - List of corresponding random unlabeled samples for the selected
+                  indices.
+        Note:
+            This method loads the best checkpoint before computing embeddings.
+            The entropy is calculated on the softmax probability distribution of
+            the model outputs, and samples with higher entropy are prioritized
+            for annotation in active learning scenarios.
+        """
         
         self.unlab_train_dl = DataLoader(
             sample_unlab_subset,

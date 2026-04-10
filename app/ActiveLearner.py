@@ -370,4 +370,4 @@ class ActiveLearner():
                                        self.ct_p["trial"])
         
         
-        return results_format["test"]#, self.count_classes
+        return results_format["test"]

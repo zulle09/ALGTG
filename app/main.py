@@ -4,7 +4,7 @@ import torch
 
 from app.dataset import Cls_Datasets
 
-torch.autograd.set_detect_anomaly(True) # type: ignore
+torch.autograd.set_detect_anomaly(True)
 import torch.distributed as dist
 
 from models.BBone_Module import Master_Model
@@ -19,13 +19,20 @@ import argparse
 import time
 from typing import Dict, Any, List, Tuple
 
-import os
 import logging
 logger = logging.getLogger(__name__)
 
 
 
 def get_args() -> argparse.Namespace:
+    """Parse and return the command-line arguments for the application.
+    Returns:
+        argparse.Namespace: Parsed command-line arguments containing the selected
+            methods, datasets, and configuration options for training and active
+            learning experiments.
+    Raises:
+        SystemExit: If argument parsing fails or required arguments are missing.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument('-gpus', '--gpus', type=int, required=False, default=1, help='Number of GPUs to use during training')
     parser.add_argument('-m', '--methods', type=str, nargs='+', required=True, choices=[
@@ -69,10 +76,26 @@ def get_args() -> argparse.Namespace:
 
 def run_strategies(ct_p: Dict[str, Any], t_p: Dict[str, Any], gtg_p: Dict[str, Any],
                    Masters: Dict[str, Master_Model], methods: List[str]) -> Tuple[Dict[str, Dict[str, List[float]]], List[int]]:
-    #Tuple[Dict[str, Dict[str, List[float]]], Dict[str, Dict[int, Dict[str, int]]], List[int]]:
-
+    """
+    Run the selected active learning strategies and collect their results.
+    This function builds the strategy objects from the provided configuration,
+    executes each strategy sequentially, and returns a mapping of strategy names
+    to their outputs along with the expected number of labeled observations at
+    each active learning iteration.
+    Args:
+        ct_p: Configuration parameters for the CT strategy family.
+        t_p: Configuration parameters for the T strategy family.
+        gtg_p: Configuration parameters for the GTG strategy family.
+        Masters: Mapping of master model names to their corresponding model instances.
+        methods: List of strategy method names to instantiate and run.
+    Returns:
+        A tuple containing:
+         - A dictionary mapping each strategy name to the result returned by
+                          that strategy's ``run()`` method.
+                        - A list of labeled-observation counts, one per active learning
+                          iteration.
+                """
     results = { }
-    #count_classes = { }
     n_lab_obs = [al_params["init_lab_obs"] + (iter * al_params["n_top_k_obs"]) for iter in range(al_params["al_iters"])]
      
     # get the strategis object to run them
@@ -82,34 +105,60 @@ def run_strategies(ct_p: Dict[str, Any], t_p: Dict[str, Any], gtg_p: Dict[str, A
     # START THE ACTIVE LEARNING PROECSS
     for strategy in strategies:
         logger.info(f'-------------------------- {strategy.strategy_name} --------------------------\n')
-        #results[strategy.strategy_name], count_classes[strategy.strategy_name] = strategy.run()
         results[strategy.strategy_name] = strategy.run()
     ##########################################################################################################
     
-    #return results, count_classes, n_lab_obs               
     return results, n_lab_obs               
 
 
-def get_device(args) -> torch.device:
-    if torch.cuda.is_available():
-        logger.info(f'Using {args.gpus} / {torch.cuda.device_count()} of the available GPUs')
-        device = torch.device('cuda')
-        if dist.is_available(): logger.info('We can train on multiple GPU')
-        if dist.is_nccl_available(): logger.info('NCCL backend available')
-    elif torch.backends.mps.is_available():
-        logger.info('CUDA is not available. Using MPS (MacOS)')
-        device = torch.device('mps')
-    else:
-        logger.info('CUDA and MPS are not available. Using CPU')
-        device = torch.device('cpu')
+def get_device(args: argparse.Namespace) -> torch.device:
+    """Select the best available computation device.
 
-    logger.info(f'Application running on {device}\n')
-    
+    Priority order:
+        1. CUDA
+        2. MPS (macOS)
+        3. CPU
+
+    Args:
+        args: Parsed CLI arguments. Expects a `gpus` attribute for logging.
+
+    Returns:
+        The selected torch device.
+    """
+    if torch.cuda.is_available():
+        logger.info(f"Using {args.gpus} / {torch.cuda.device_count()} of the available GPUs")
+        device = torch.device("cuda")
+
+        if dist.is_available():
+            logger.info("Distributed package is available")
+        if dist.is_nccl_available():
+            logger.info("NCCL backend available")
+
+    elif torch.backends.mps.is_available():
+        logger.info("CUDA is not available. Using MPS (macOS)")
+        device = torch.device("mps")
+
+    else:
+        logger.info("CUDA and MPS are not available. Using CPU")
+        device = torch.device("cpu")
+
+    logger.info(f"Application running on {device}\n")
     return device
 
 
 
 def main() -> None:
+    """Run the active learning benchmark workflow.
+
+    This entry point parses command-line arguments, initializes runtime
+    configuration (logging, device, reproducibility), builds datasets and model
+    components, executes selected strategies across trials, and saves artifacts
+    (plots and YAML configs).
+
+    Raises:
+        ValueError: If backbone pre-training is enabled without a cold-start
+            strategy.
+    """
     args = get_args()
     
     exp_path = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
