@@ -17,72 +17,62 @@ conda activate <env>
 ```
 
 ### Multi GPUs
-If you want to perform experiments leveraging multiple gpus, you should edit **ActiveLearner.py** file, *train_evaluate* function, more precisely:
-```python
-os.environ["MASTER_ADDR"] = "xxxxxxxxxx" # -> replace with the correct address
-os.environ["MASTER_PORT"] = "yyyyyyyyyy" # -> repalce with a free port
-```
+If you want to perform experiments leveraging multiple gpus, you should edit **ActiveLearner.py** file, *train_evaluate* function.
+
 
 ## Application Start-Up
 Example of application start-up:
 ```
-python3 app/main.py -gpus 1 -m random entropy coreset badge bald cdal tavaal ll ll_gtg -ds cifar10 -tr 5 -am corr -am_s mixed -am_ts mean -e_s mean
+python app/main.py -gpus 1 -m random entropy coreset badge bald cdal tavaal ll ll_gtg -ds cifar10 -tr 5 -am corr -am_s mixed -am_ts mean -e_s mean
 ```
 
 Accepted Arguments:
 ```
-usage: main.py [-h] [-gpus GPUS] -m
-               {random,entropy,coreset,badge,bald,cdal,tavaal,alphamix,tidal,ll,gtg,ll_gtg,llmlp_gtg,lsmlps_gtg,lstmreg_gtg,lstmbc_gtg}
-               [{random,entropy,coreset,badge,bald,cdal,tavaal,alphamix,tidal,ll,gtg,ll_gtg,llmlp_gtg,lsmlps_gtg,lstmreg_gtg,lstmbc_gtg} ...]
-               -ds {cifar10,cifar100,svhn,fmnist,caltech256,tinyimagenet}
-               [{cifar10,cifar100,svhn,fmnist,caltech256,tinyimagenet} ...]
-               [-tr TRIALS] [-bbone] [-tulp]
-               [-am {corr,cos_sim,rbfk} [{corr,cos_sim,rbfk} ...]]
-               [-am_s {uncertanity,diversity,mixed}]
-               [-am_ts {threshold,mean,none} [{threshold,mean,none} ...]]
-               [-am_t AFFINITY_MATRIX_THRESHOLD] [-e_s {mean,integral}]
-               [-gtg_iter GTG_ITERATIONS] [-gtg_t GTG_TOLLERANCE]
-               [-bsgtgo BATCH_SIZE_GTG_ONLINE]
+usage: main.py [-h] [-gpus GPUS] [-ma MASTER_ADDRESS] [-mp MASTER_PORT]
+               -m {random,entropy,coreset,badge,bald,cdal,tavaal,alphamix,tidal,ll,gtg,ll_gtg,llmlp_gtg,lsmlps_gtg,lsmlpsA_gtg,lstmreg_gtg,lstmbc_gtg} [{random,entropy,coreset,badge,bald,cdal,tavaal,alphamix,tidal,ll,gtg,ll_gtg,llmlp_gtg,lsmlps_gtg,lsmlpsA_gtg,lstmreg_gtg,lstmbc_gtg} ...]
+               -ds {cifar10,cifar100,svhn,fmnist,caltech256,tinyimagenet} [{cifar10,cifar100,svhn,fmnist,caltech256,tinyimagenet} ...] [-tr TRIALS] [-bbone]
+               [-cs_s {none,mse,kmeans}] [-tulp] [-am {corr,cos_sim,rbfk} [{corr,cos_sim,rbfk} ...]] [-am_md {LL,UU,LU,UL} [{LL,UU,LU,UL} ...]] [-am_sl]
+               [-am_s {uncertanity,diversity,mixed}] [-am_ts {threshold,mean,none} [{threshold,mean,none} ...]] [-am_t AFFINITY_MATRIX_THRESHOLD]
+               [-e_s {mean,integral}] [-gtg_iter GTG_ITERATIONS] [-gtg_t GTG_TOLLERANCE] [-bsgtgo BATCH_SIZE_GTG_ONLINE]
 
 options:
   -h, --help            show this help message and exit
-  -gpus GPUS, --gpus GPUS
-                        Number of GPUs to use during training
-  -m {random,entropy,coreset,badge,bald,cdal,tavaal,alphamix,tidal,ll,gtg,ll_gtg,llmlp_gtg,lsmlps_gtg,lstmreg_gtg,lstmbc_gtg} [{random,entropy,coreset,badge,bald,cdal,tavaal,alphamix,tidal,ll,gtg,ll_gtg,llmlp_gtg,lsmlps_gtg,lstmreg_gtg,lstmbc_gtg} ...], 
-      --methods {random,entropy,coreset,badge,bald,cdal,tavaal,alphamix,tidal,ll,gtg,ll_gtg,llmlp_gtg,lsmlps_gtg,lstmreg_gtg,lstmbc_gtg} [{random,entropy,coreset,badge,bald,cdal,tavaal,alphamix,tidal,ll,gtg,ll_gtg,llmlp_gtg,lsmlps_gtg,lstmreg_gtg,lstmbc_gtg} ...]
+  -gpus, --gpus GPUS    Number of GPUs to use during training
+  -ma, --master_address MASTER_ADDRESS
+                        Master address for distributed training
+  -mp, --master_port MASTER_PORT
+                        Master port for distributed training
+  -m, --methods {random,entropy,coreset,badge,bald,cdal,tavaal,alphamix,tidal,ll,gtg,ll_gtg,llmlp_gtg,lsmlps_gtg,lsmlpsA_gtg,lstmreg_gtg,lstmbc_gtg} [{random,entropy,coreset,badge,bald,cdal,tavaal,alphamix,tidal,ll,gtg,ll_gtg,llmlp_gtg,lsmlps_gtg,lsmlpsA_gtg,lstmreg_gtg,lstmbc_gtg} ...]
                         Possible methods to choose
-  -ds {cifar10,cifar100,svhn,fmnist,caltech256,tinyimagenet} [{cifar10,cifar100,svhn,fmnist,caltech256,tinyimagenet} ...], 
-      --datasets {cifar10,cifar100,svhn,fmnist,caltech256,tinyimagenet} [{cifar10,cifar100,svhn,fmnist,caltech256,tinyimagenet} ...]
+  -ds, --datasets {cifar10,cifar100,svhn,fmnist,caltech256,tinyimagenet} [{cifar10,cifar100,svhn,fmnist,caltech256,tinyimagenet} ...]
                         Possible datasets to choose
-  -tr TRIALS, --trials TRIALS
-                        AL trials
+  -tr, --trials TRIALS  AL trials
   -bbone, --bbone_pre_train
-                        BackBone pre-train (binary calssification task) for GTG Module
+                        BackBone pre-train for GTG Module
+  -cs_s, --cold_start_strategy {none,mse,kmeans}
+                        Cold start strategy
   -tulp, --temp_unlab_pool
                         Temporary Unlabelled Pool
-  -am {corr,cos_sim,rbfk} [{corr,cos_sim,rbfk} ...], --affinity_matrix {corr,cos_sim,rbfk} [{corr,cos_sim,rbfk} ...]
+  -am, --affinity_matrix {corr,cos_sim,rbfk} [{corr,cos_sim,rbfk} ...]
                         Affinity matrix to choose
-  -am_s {uncertanity,diversity,mixed}, --affinity_matrix_strategy {uncertanity,diversity,mixed}
+  -am_md, --affinity_matrix_mixed_distance {LL,UU,LU,UL} [{LL,UU,LU,UL} ...]
+                        Affinity matrix portion to convert into distance measure
+  -am_sl, --affnity_matrix_self_loop
+                        Affinity matrix cells self loop
+  -am_s, --affinity_matrix_strategy {uncertanity,diversity,mixed}
                         Different affinity matrix modification
-  -am_ts {threshold,mean,none} [{threshold,mean,none} ...], --affinity_matrix_threshold_strategies {threshold,mean,none} [{threshold,mean,none} ...]
+  -am_ts, --affinity_matrix_threshold_strategies {threshold,mean,none} [{threshold,mean,none} ...]
                         Possible treshold strategy types to choose to apply in the affinity matrix
-  -am_t AFFINITY_MATRIX_THRESHOLD, --affinity_matrix_threshold AFFINITY_MATRIX_THRESHOLD
+  -am_t, --affinity_matrix_threshold AFFINITY_MATRIX_THRESHOLD
                         Affinity Matrix Threshold for our method, when threshold_strategy = mean, this is ignored
-  -e_s {mean,integral}, --entropy_strategy {mean,integral}
+  -e_s, --entropy_strategy {mean,integral}
                         Entropy strategy to sum up the entropy history
-  -gtg_iter GTG_ITERATIONS, --gtg_iterations GTG_ITERATIONS
+  -gtg_iter, --gtg_iterations GTG_ITERATIONS
                         Maximum GTG iterations to perorm
-  -gtg_t GTG_TOLLERANCE, --gtg_tollerance GTG_TOLLERANCE
+  -gtg_t, --gtg_tollerance GTG_TOLLERANCE
                         GTG tollerance
-  -bsgtgo BATCH_SIZE_GTG_ONLINE, --batch_size_gtg_online BATCH_SIZE_GTG_ONLINE
+  -bsgtgo, --batch_size_gtg_online BATCH_SIZE_GTG_ONLINE
                         Initial batch size for the online GTG version
-
 ```
 
-### Next step
-- Remove Detection step, focus only on the classificarion;
-- Restructire the code make it more readable, comment everithing;
-- Focus on analysing the problem of why it do not worksm, the online version, whereas the offline verison works fine;
-- Study new strategy, new published papers & researches;
-
-For now that's it I think there is a lot to do, supposing that nobody else has continue this project...I hope s:)s
+# THE REPOSITORY IS STILL IN WORK IN PROGRESS!!!
