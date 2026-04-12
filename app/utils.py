@@ -20,6 +20,8 @@ import yaml
 import random
 from matplotlib.typing import ColorType
 from typing import List, Dict, Any, Tuple
+import argparse
+import torch.distributed as dist
 
 
 
@@ -962,3 +964,38 @@ def save_yamal(
     yaml_dict.update(al_params)
     yaml_dict.update(gtg_params)
     with open(f'results/{exp_path}/{dataset_name}/yamal_conf.yamal', 'w') as file: yaml.dump(yaml_dict, file)
+
+
+def get_device(n_gpus: int) -> torch.device:
+    """Select the best available computation device.
+
+    Priority order:
+        1. CUDA
+        2. MPS (macOS)
+        3. CPU
+
+    Args: 
+        n_gpus: The number of GPUs to use if CUDA is available.
+
+    Returns:
+        The selected torch device.
+    """
+    if torch.cuda.is_available():
+        logger.info(f"Using {n_gpus} / {torch.cuda.device_count()} of the available GPUs")
+        device = torch.device("cuda")
+
+        if dist.is_available():
+            logger.info("Distributed package is available")
+        if dist.is_nccl_available():
+            logger.info("NCCL backend available")
+
+    elif torch.backends.mps.is_available():
+        logger.info("CUDA is not available. Using MPS (macOS)")
+        device = torch.device("mps")
+
+    else:
+        logger.info("CUDA and MPS are not available. Using CPU")
+        device = torch.device("cpu")
+
+    logger.info(f"Application running on {device}\n")
+    return device

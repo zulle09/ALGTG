@@ -18,6 +18,29 @@ class LearningLoss(ActiveLearner):
                 
                 
     def query(self, sample_unlab_subset: Subset, n_top_k_obs: int) -> Tuple[List[int], List[int]]:
+        """
+        Select the top-k most informative unlabeled observations for annotation.
+        This method is part of an active learning strategy. It evaluates the model's
+        embeddings on the unlabeled subset and selects the samples with the highest
+        scores (based on the module output) to be labeled next.
+        
+        Args:
+            sample_unlab_subset (Subset): A PyTorch Subset containing the unlabeled
+                training data to be evaluated.
+            n_top_k_obs (int): The number of top observations to select from the
+                unlabeled subset.
+        
+        Returns:
+            Tuple[List[int], List[int]]: A tuple containing:
+                - List of indices (from the unlabeled subset) corresponding to the
+                  top-k observations with highest scores.
+                - List of corresponding random unlabeled samples associated with
+                  each selected index.
+        
+        Example:
+            >>> top_indices, top_samples = query(unlab_subset, n_top_k_obs=10)
+            >>> print(f"Selected {len(top_indices)} observations")
+        """
         self.unlab_train_dl = DataLoader(
             sample_unlab_subset,
             batch_size=self.batch_size, shuffle=False, pin_memory=True

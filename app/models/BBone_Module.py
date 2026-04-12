@@ -14,6 +14,22 @@ logger = logging.getLogger(__name__)
 
 class Master_Model(nn.Module):
     def __init__(self, backbone: ResNet | VGG, added_module: LossNet | GTGModule | None, dataset_name: str) -> None:
+        """
+        Initialize the Master_Model.
+        
+        Args:
+            backbone: The backbone network, either ResNet or VGG architecture.
+            added_module: Optional additional module, can be LossNet, GTGModule,
+                or None if no extra module is used.
+            dataset_name: Name of the dataset used for saving the checkpoint.
+        
+        Note:
+            The model name is automatically constructed from the backbone class
+            name and the added module name (if provided). An initial checkpoint
+            containing the model state dict is saved to
+            'app/checkpoints/{dataset_name}/{model_name}_init.pth.tar' after
+            initialization.
+        """
         
         super(Master_Model, self).__init__()
         
@@ -36,6 +52,40 @@ class Master_Model(nn.Module):
         
 
     def forward(self, x, labels=None, weight=1, mode='all', iteration=None):
+        """
+        Performs forward pass through the model.
+        
+        Args:
+            x (torch.Tensor): Input tensor to the backbone network.
+            labels (torch.Tensor, optional): Ground truth labels for GTGModule.
+                Defaults to None.
+            weight (float, optional): Weight factor for feature detachment. If set
+                to 0, features are detached from the computational graph. Defaults to 1.
+            mode (str, optional): Operation mode determining what to return. Options are:
+                - 'all': Returns both outputs and module output (training mode only).
+                - 'outs': Returns only model outputs (evaluation mode only).
+                - 'embedds': Returns only embeddings (evaluation mode only).
+                - 'module_out': Returns only module output (evaluation mode only).
+                Defaults to 'all'.
+            iteration (int, optional): Current iteration number for GTGModule.
+                Defaults to None.
+        
+        Returns:
+            tuple or torch.Tensor: Varies depending on mode:
+                - 'all': Tuple of (outs, module_out) during training; raises error in eval.
+                - 'outs': Model outputs tensor in evaluation mode.
+                - 'embedds': Embeddings tensor in evaluation mode.
+                - 'module_out': Module output tensor in evaluation mode.
+        
+        Raises:
+            AttributeError: If mode is not valid, if called in wrong training/evaluation
+                state, or if no added_module exists when required.
+        
+        Note:
+            In 'all' mode during training, assertions verify that embeddings contain no
+            NaN values and have a standard deviation greater than zero.
+        """
+
         if mode == 'all':
             if self.training:
                 outs, embedds = self.backbone(x)

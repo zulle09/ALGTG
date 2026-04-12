@@ -23,6 +23,38 @@ class BALD(ActiveLearner):
         
         
     def evaluate_unlabelled_train(self, n_drop=5) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Evaluate the unlabelled training data using Monte Carlo dropout.
+        This method performs inference on the unlabelled training dataset using
+        multiple forward passes with dropout enabled (MC dropout). It collects
+        the predicted probability distributions across all dropout iterations
+        to compute the disagreement metric for the BALD acquisition strategy.
+        
+        Args:
+            n_drop (int, optional): Number of dropout iterations to perform.
+                Defaults to 5. More iterations provide better uncertainty
+                estimates but increase computational cost.
+        
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: A tuple containing:
+                - indices (torch.Tensor): The indices of the unlabelled samples
+                  in the training dataset. Shape: (num_samples,).
+                - prob_dist_drop (torch.Tensor): Predicted probability
+                  distributions for each dropout iteration. Shape:
+                  (n_drop, num_samples, num_classes).
+        
+        Raises:
+            RuntimeError: If the model checkpoint cannot be loaded.
+        
+        Note:
+            This method sets the backbone to training mode to enable dropout
+            during inference (MC dropout). The model should have dropout layers
+            in the backbone for this to work correctly.
+        
+        Example:
+            >>> indices, probs = strategy.evaluate_unlabelled_train(n_drop=10)
+            >>> print(f"Evaluated {len(indices)} samples with 10 dropout passes")
+        """
         
         self.load_best_checkpoint()
 
@@ -48,6 +80,26 @@ class BALD(ActiveLearner):
     
 
     def disagreement_dropout(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Computes disagreement score using dropout-based uncertainty estimation.
+        This method evaluates the disagreement between predictions across different
+        dropout masks to estimate uncertainty. It calculates the difference between
+        the average entropy of individual predictions and the entropy of the average
+        prediction, which serves as a measure of model disagreement.
+        
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: A tuple containing:
+                - indices: Indices of the unlabelled training samples.
+                - Tensor: Disagreement scores (entropy2 - entropy1) for each sample.
+                    Higher values indicate greater uncertainty.
+        
+        Raises:
+            RuntimeError: If CUDA memory allocation fails during computation.
+        
+        Example:
+            >>> indices, disagreement = model.disagreement_dropout()
+            >>> selected_indices = indices[disagreement > threshold]
+        """
         indices, prob_dist_drop = self.evaluate_unlabelled_train()
         
         mean_pb = torch.mean(prob_dist_drop, dim=0)
@@ -63,6 +115,26 @@ class BALD(ActiveLearner):
     
     
     def query(self, sample_unlab_subset: Subset, n_top_k_obs: int) -> Tuple[List[int], List[int]]:
+        """
+        Query the most informative unlabelled observations for active learning.
+        This method selects the top-k unlabelled observations with the highest
+        entropy (i.e., most uncertain predictions) from the unlabelled subset.
+        It loads the best model checkpoint, computes embeddings for the unlabelled
+        data, calculates softmax probabilities, and identifies the observations
+        with maximum uncertainty based on entropy.
+        
+        Args:
+            sample_unlab_subset: A Subset containing the unlabelled observations
+                to query from.
+            n_top_k_obs: The number of top-k most uncertain observations to select.
+        
+        Returns:
+            Tuple[List[int], List[int]]: A tuple containing:
+                - List[int]: Indices of the top-k most uncertain unlabelled observations.
+                - List[int]: Corresponding random unlabelled samples for the selected indices.
+        Example:
+            >>> topk_indices, rand_samples = query(unlab_subset, n_top_k_obs=10)
+        """
                         
         self.unlab_train_dl = DataLoader(
             sample_unlab_subset, batch_size=self.batch_size,

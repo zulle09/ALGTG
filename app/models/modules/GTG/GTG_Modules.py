@@ -1,8 +1,13 @@
 
 import torch.nn as nn
 import torch
-import torch.nn.functional as F
 from typing import List, Dict, Any
+
+#################################################################################################################################
+# Define the other GTG modules (MLP, LSTM, etc.) here. They should have the same input and output of the GTG_LS_GTG_LSTM module, 
+# so that they can be easily interchanged in the training loop.
+#################################################################################################################################
+
 
 class Module_LS_GTG_LSTM(nn.Module):
     def __init__(self, params: Dict[str, Any], input_size: int, hidden_size: int, num_layers: int, output_size: int, \
@@ -43,7 +48,6 @@ class Module_LS_GTG_LSTM(nn.Module):
         out = self.classifier(out)
         return self.sigmoid(out) if self.is_bin_class else out
       
-
 
 
 class Module_LSs_GTG_MLP_alternative(nn.Module):

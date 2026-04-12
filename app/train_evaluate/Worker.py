@@ -41,7 +41,6 @@ class Cls_TrainWorker():
         self.batch_size = params["batch_size"]
         self.ds_t_p = params["t_p"][self.dataset_name]
         self.bbone_pt = params["ct_p"]["bbone_init_weights"]
-        #if 'perc_labelled_batch' in params: self.perc_labelled_batch = params['perc_labelled_batch']
         if 'batch_size_gtg_online' in params: self.batch_size_gtg_online = params['batch_size_gtg_online']
         
         self.train_dl: DataLoader | Tuple[Subset, Subset] = params["train_dl"]
@@ -89,6 +88,29 @@ class Cls_TrainWorker():
         
 
     def init_opt_sched(self):
+        """
+        Initialize optimizers and learning rate schedulers.
+        Sets up PyTorch optimizers and MultiStepLR learning rate schedulers for
+        both the backbone model and any additional modules defined in the model.
+        The decay parameter is configured based on the module name and method name.
+        If the module name is not None and the method is not 'TiDAL', weight decay
+        is applied from the optimizer configuration.
+        For the backbone, an optimizer is always created using the backbone-specific
+        configuration. If a module name is provided, an additional optimizer is
+        created for the added module with its own learning rate scheduler.
+        
+        Attributes:
+            decay: Weight decay value for the optimizer, or None if not applicable
+                (when module_name is None or method_name is 'TiDAL').
+            optimizers: List containing optimizer for backbone, and optionally
+                for the added module.
+            lr_schedulers: List of MultiStepLR schedulers corresponding to each
+                optimizer in the same order.
+        
+        Note:
+            The backbone optimizer uses milestones from optimizers["milestones"]["backbone"],
+            while the module optimizer uses milestones from optimizers["milestones"][module_name].
+        """
         optimizers = self.ds_t_p["optimizers"]
         module_name = self.model.only_module_name
         self.decay = optimizers["modules"]["decay"][module_name] if module_name != None and self.method_name != 'TiDAL' else None
@@ -110,74 +132,172 @@ class Cls_TrainWorker():
             
     
     def __save_checkpoint(self, filename: str) -> None:
+        """
+        Save a checkpoint of the model state to a file.
+
+        Serializes the model's state dictionary and saves it to the specified
+        file path. Handles both distributed (DataParallel) and single-model
+        scenarios.
+
+        Args:
+            filename: The path where the checkpoint file will be saved.
+
+        Returns:
+            None
+
+        Raises:
+            IOError: If the checkpoint cannot be written to the specified file.
+        """
         logger.info(f' => Saving {filename} Checkpoint')
         checkpoint = dict(state_dict = self.model.module.state_dict() if self.world_size > 1 else self.model.state_dict()) # type: ignore
         torch.save(checkpoint, filename)
     
     
     def __load_checkpoint(self, filename: str) -> None:
+        """Load a checkpoint file and restore the model's state.
+
+        Args:
+            filename: Path to the checkpoint file to be loaded.
+
+        Returns:
+            None
+
+        Raises:
+            FileNotFoundError: If the checkpoint file does not exist.
+            KeyError: If the checkpoint does not contain 'state_dict'.
+
+        Note:
+            If world_size > 1 (distributed training), the state dict is loaded
+            into self.model.module. Otherwise, it is loaded directly into self.model.
+        """
         logger.info(f' => Loading {filename} Checkpoint')
         checkpoint = torch.load(filename, map_location=self.device)
         self.model.module.load_state_dict(checkpoint["state_dict"]) if self.world_size > 1 else self.model.load_state_dict(checkpoint["state_dict"]) # type: ignore
         
 
-    def compute_losses(self, weight: float, module_out: torch.Tensor | None, outputs: torch.Tensor, labels: torch.Tensor, epoch: int,
-                       tidal: None | Tuple[torch.Tensor, torch.Tensor, int] = None,) -> Tuple[float, torch.Tensor, float, float]:
-                
-        ce_loss = self.ce_loss_fn(outputs, labels)
-        backbone = torch.mean(ce_loss)
-        self.i += 1
-            
-        if module_out == None:
-            return self.score_fn(outputs, labels), backbone, backbone.item(), 0
-        
-        elif self.is_gtg_module:
-                        
-            (pred_entr, true_entr), labelled_mask = module_out
-            if self.i % 20 == 0: logger.info(f'y_pred {pred_entr}\ny_true {true_entr}') 
-            
-            if self.net_type != 'lstmbc': entr_loss = weight * self.mse_loss_fn(pred_entr, true_entr.detach())
-            else: entr_loss = weight * self.bce_loss_fn(pred_entr, true_entr.detach())
+    def compute_losses(
+                self, weight: float, 
+                module_out: torch.Tensor | None, 
+                outputs: torch.Tensor, 
+                labels: torch.Tensor, 
+                epoch: int,
+                tidal: None | Tuple[torch.Tensor, torch.Tensor, int] = None
+            ) -> Tuple[float, torch.Tensor, float, float]:
+            """Compute losses for the model based on the active learning method.
 
-            lab_ce_loss = torch.mean(ce_loss[labelled_mask])
-            
-            ############################################################################################################################
-            # NO LOSS SCALING SINCE I HAVE REMOVED THE OVERSAMPLING STEP
-            #lab_ce_loss /= self.rateo_unlab_lab_batch
-            # ce loss scaled by the ratio between unlabelled and labelled batches
-            # es: ma1000 labelled samples, 10000 unlabelled samples 128 batch_size -> scaling factor = (10000/128) / (1000/128) = 9.875
-            ############################################################################################################################
-            
-            entr_loss = torch.mean(entr_loss[labelled_mask]) + torch.mean(entr_loss[~labelled_mask])
-            
-            loss = lab_ce_loss + entr_loss
-            
-            return self.score_fn(outputs[labelled_mask], labels[labelled_mask]), loss, lab_ce_loss.item(), entr_loss.item()
-            
-        
-        elif self.method_name in ['LearningLoss', 'TA_VAAL'] or 'GTG_off' in self.method_name:
-            loss_weird = weight * self.ll_loss_fn(module_out, ce_loss)
-            loss = backbone + loss_weird
-                
-            return self.score_fn(outputs, labels), loss, backbone.item(), loss_weird.item()
-        
-        elif self.method_name == 'TiDAL':
-            log_assert(tidal != None, 'TiDAL parameters are None')
-            idxs, moving_prob, epoch = tidal # type: ignore
-            moving_prob = moving_prob.to(self.device)
-            moving_prob = (moving_prob * epoch + torch.softmax(outputs, dim=1) * 1) / (epoch + 1)
-            
-            self.train_dl.dataset.moving_prob[idxs.tolist(), :] = moving_prob.detach().cpu() # type: ignore
-                        
-            m_module_loss = weight * self.kld_loss_fn(F.log_softmax(module_out, 1), moving_prob.detach())
-            loss = backbone + m_module_loss
-                
-            return self.score_fn(outputs, labels), loss, backbone.item(), m_module_loss.item()
+            Args:
+                weight: Weight factor for the module loss.
+                module_out: Output from the additional module (e.g., GTG, LearningLoss).
+                    Can be None if no additional module is used.
+                outputs: Output from the backbone model.
+                labels: Ground truth labels.
+                epoch: Current training epoch.
+                tidal: Tuple containing (indices, moving probabilities, epoch) for TiDAL method.
+                    None for other methods.
 
-        else: raise AttributeError('Invalid method_name')
+            Returns:
+                Tuple containing:
+                    - accuracy_score: Model accuracy on the current batch.
+                    - loss: Total loss (backbone + module loss).
+                    - backbone_loss: Cross-entropy loss of the backbone.
+                    - module_loss: Loss from the additional module (e.g., entropy loss, learning loss).
+
+            Raises:
+                AttributeError: If method_name is not recognized.
+
+            Note:
+                This method handles different active learning strategies:
+                    - GTG modules: Computes MSE/BCE between predicted and true entropies.
+                    - LearningLoss/TA_VAAL/GTG_off: Uses LossPredLoss for learning loss.
+                    - TiDAL: Uses KL divergence between predicted and moving average probabilities.
+            """
+            
+            # Compute the cross-entropy loss for the backbone model and any additional module losses based on the method being used.
+            # The function calculates the loss for the backbone and the added module (if applicable) and
+            ce_loss = self.ce_loss_fn(outputs, labels)
+            backbone = torch.mean(ce_loss)
+            self.i += 1
+                
+            if module_out == None:
+                # If there is no additional module output, return the accuracy score, backbone loss, and zeros for module loss components.
+                return self.score_fn(outputs, labels), backbone, backbone.item(), 0
+            
+            elif self.is_gtg_module:
+                
+                # For GTG modules, compute the loss based on the predicted and true entropies. 
+                # The loss is a combination of the mean squared error (or binary cross-entropy for 'lstmbc') between the predicted and true entropies, 
+                # and the cross-entropy loss for the labelled samples. The total loss is returned along with the accuracy score and individual loss components.
+                (pred_entr, true_entr), labelled_mask = module_out
+                if self.i % 20 == 0: logger.info(f'y_pred {pred_entr}\ny_true {true_entr}') 
+                
+                if self.net_type != 'lstmbc': entr_loss = weight * self.mse_loss_fn(pred_entr, true_entr.detach())
+                else: entr_loss = weight * self.bce_loss_fn(pred_entr, true_entr.detach())
+
+                lab_ce_loss = torch.mean(ce_loss[labelled_mask])
+                
+                ############################################################################################################################
+                # NO LOSS SCALING SINCE I HAVE REMOVED THE OVERSAMPLING STEP
+                #lab_ce_loss /= self.rateo_unlab_lab_batch
+                # ce loss scaled by the ratio between unlabelled and labelled batches
+                # es: ma1000 labelled samples, 10000 unlabelled samples 128 batch_size -> scaling factor = (10000/128) / (1000/128) = 9.875
+                ############################################################################################################################
+                
+                entr_loss = torch.mean(entr_loss[labelled_mask]) + torch.mean(entr_loss[~labelled_mask])
+                
+                loss = lab_ce_loss + entr_loss
+                
+                return self.score_fn(outputs[labelled_mask], labels[labelled_mask]), loss, lab_ce_loss.item(), entr_loss.item()
+                
+            
+            elif self.method_name in ['LearningLoss', 'TA_VAAL'] or 'GTG_off' in self.method_name:
+                # For methods that use a learning loss, compute the loss as a combination of the backbone cross-entropy loss and the learning loss. 
+                # The learning loss is calculated using the LossPredLoss function, which takes the module output and the cross-entropy loss as inputs. 
+                # The total loss is returned along with the accuracy score and individual loss components.
+                loss_weird = weight * self.ll_loss_fn(module_out, ce_loss)
+                loss = backbone + loss_weird
+                    
+                return self.score_fn(outputs, labels), loss, backbone.item(), loss_weird.item()
+            
+            elif self.method_name == 'TiDAL':
+                # For the TiDAL method, compute the loss as a combination of the backbone cross-entropy loss and a KL divergence loss between
+                # the predicted module output and a moving average of probabilities.
+                log_assert(tidal != None, 'TiDAL parameters are None')
+                idxs, moving_prob, epoch = tidal # type: ignore
+                moving_prob = moving_prob.to(self.device)
+                moving_prob = (moving_prob * epoch + torch.softmax(outputs, dim=1) * 1) / (epoch + 1)
+                
+                self.train_dl.dataset.moving_prob[idxs.tolist(), :] = moving_prob.detach().cpu() # type: ignore
+                            
+                m_module_loss = weight * self.kld_loss_fn(F.log_softmax(module_out, 1), moving_prob.detach())
+                loss = backbone + m_module_loss
+                    
+                return self.score_fn(outputs, labels), loss, backbone.item(), m_module_loss.item()
+
+            else: raise AttributeError('Invalid method_name')
     
     
-    def return_moved_imgs_labs(self, images: torch.Tensor, labels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def return_moved_imgs_labs(
+            self, 
+            images: torch.Tensor, 
+            labels: torch.Tensor
+        ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Move images and labels to the specified device.
+
+        Transfers the input images and labels tensors to the appropriate device
+        (e.g., GPU). In distributed training settings (world_size > 1), uses
+        non-blocking transfers for better performance.
+
+        Args:
+            images: A tensor containing batch of images to be moved.
+            labels: A tensor containing corresponding labels to be moved.
+
+        Returns:
+            A tuple of (images, labels) tensors moved to the device.
+
+        Raises:
+            RuntimeError: If the device is not available or tensor transfer fails.
+        """
         if self.world_size > 1:
             images = images.to(self.device, non_blocking=True)
             labels = labels.to(self.device, non_blocking=True)
@@ -185,7 +305,39 @@ class Cls_TrainWorker():
         return images, labels
     
     
-    def train_batch(self, images, labels,  weight, idxs, moving_prob, epoch, train_loss_ce, train_loss_pred) -> Tuple[float, float, float, float]:
+    def train_batch(
+            self, 
+            images: torch.Tensor, 
+            labels: torch.Tensor,  
+            weight: torch.Tensor, 
+            idxs: torch.Tensor, 
+            moving_prob: torch.Tensor, 
+            epoch: int, 
+            train_loss_ce: float, 
+            train_loss_pred: float
+        ) -> Tuple[float, float, float, float]:
+        """
+        Trains the model on a single batch of data.
+        Executes a complete training iteration including forward pass, loss computation,
+        backward propagation, and parameter updates.
+        
+        Args:
+            images: A batch of input images.
+            labels: Corresponding labels for the input images.
+            weight: Weight factor for the module loss component.
+            idxs: Indices of the samples in the current batch (used for TiDAL).
+            moving_prob: Moving average probabilities for TiDAL method.
+            epoch: Current training epoch number.
+            train_loss_ce: Cumulative cross-entropy loss up to the current batch (for logging).
+            train_loss_pred: Cumulative module prediction loss up to the current batch (for logging).
+        
+        Returns:
+            Tuple[float, float, float, float]: A tuple containing:
+                - score: Model score/metric.
+                - loss: Computed total loss value.
+                - train_loss_ce: Updated cross-entropy loss.
+                - train_loss_pred: Updated prediction loss.
+        """
         images, labels = self.return_moved_imgs_labs(images, labels)
                 
         for optimizer in self.optimizers: optimizer.zero_grad(set_to_none=True)
@@ -206,7 +358,38 @@ class Cls_TrainWorker():
     
     
     def train(self) -> torch.Tensor:
-        
+        """
+        Train the model for a specified number of epochs.
+
+        This method executes the main training loop, iterating over the training
+        dataset for the specified number of epochs. It handles both labeled-only
+        and labeled+unlabeled (for GTG modules) training scenarios. The method
+        computes training metrics including accuracy, total loss, cross-entropy
+        loss, and module-specific loss (if applicable).
+
+        Args:
+            None. The method uses instance attributes initialized in __init__.
+
+        Returns:
+            torch.Tensor: A tensor of shape (4, epochs) containing training
+                metrics across all epochs:
+                - Row 0: Training accuracy per epoch
+                - Row 1: Total training loss per epoch
+                - Row 2: Cross-entropy loss per epoch
+                - Row 3: Module prediction loss per epoch (e.g., GTG loss)
+
+        Raises:
+            None. Errors during training are logged and handled internally.
+
+        Note:
+            - For distributed training (world_size > 1), the data sampler epoch
+              is set to ensure proper shuffling across epochs.
+            - If decay is enabled and the epoch exceeds the decay threshold,
+              the weight for the module loss is set to 0 (except for llmlp_gtg
+              with TiDAL method).
+            - The best model checkpoint is saved after training completes.
+        """
+            
         weight = 1.
         results = torch.zeros((4, self.epochs), device=self.device)
                 
@@ -270,6 +453,15 @@ class Cls_TrainWorker():
 
 
     def test(self) -> torch.Tensor:
+        """
+        Tests the model using the best checkpoint.
+        Loads the best model checkpoint from the specified path, sets the
+        backbone to evaluation mode, and runs inference on the test dataset
+        to compute the test accuracy.
+        
+        Returns:
+            torch.Tensor: A tensor containing the computed test accuracy.
+        """
         
         self.__load_checkpoint(self.check_best_path)
         test_accuracy = .0

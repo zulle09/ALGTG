@@ -19,6 +19,27 @@ class Random(ActiveLearner):
         
         
     def query(self, sample_unlab_subset: Subset, n_top_k_obs: int) -> Tuple[List[int], List[int]]:
+        """Select random observations from an unlabelled subset for querying.
+
+        Randomly samples a specified number of indices from the unlabelled subset.
+        If the subset contains fewer observations than requested, all available
+        indices are returned.
+
+        Args:
+            sample_unlab_subset (Subset): The subset of unlabelled data from which
+                to sample observations.
+            n_top_k_obs (int): The number of observations to sample (top K).
+
+        Returns:
+            Tuple[List[int], List[int]]: A tuple containing:
+                - List[int]: Indices of the sampled items in the original 
+                  unlabelled subset indices list.
+                - List[int]: The sampled indices from the unlabelled subset.
+
+        Note:
+            If the number of available unlabelled indices is less than n_top_k_obs,
+            all available indices will be returned without raising an error.
+        """
         logger.info(f' => Sampling K unlabelled observations')
         if(len(sample_unlab_subset.indices) > n_top_k_obs):           
             sample = list(random.sample(list(sample_unlab_subset.indices), n_top_k_obs))

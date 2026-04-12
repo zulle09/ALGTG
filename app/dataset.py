@@ -422,7 +422,8 @@ class Cls_Dataset(Dataset):
             n_classes: int = -1
         ) -> None:
         
-        """A custom dataset wrapper class that handles various image datasets.
+        """
+        A custom dataset wrapper class that handles various image datasets.
         This class provides a unified interface for loading and accessing different
         image datasets (e.g., TinyImageNet, SVHN, Caltech256) with appropriate
         transforms. It supports both training and testing modes.

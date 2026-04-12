@@ -53,12 +53,57 @@ class GTG_off(ActiveLearner):
         
     
     def get_A_treshold(self, A: torch.Tensor) -> Any:
+        """
+        Calculate the threshold value for tensor A.
+
+        Determines the threshold based on the configured threshold strategy.
+        If the strategy is set to 'mean', computes the mean of the input tensor.
+        Otherwise, returns the predefined AM_threshold value.
+
+        Args:
+            A (torch.Tensor): Input tensor for which to calculate the threshold.
+
+        Returns:
+            Any: The threshold value. Either the mean of tensor A if strategy
+                is 'mean', or self.AM_threshold otherwise.
+
+        Raises:
+            Exception: Any exceptions raised by torch.mean for invalid inputs.
+        """
         if self.AM_threshold_strategy == 'mean': return torch.mean(A)
         else: return self.AM_threshold
     
         
     # select the relative choosen affinity matrix method
     def get_A(self) -> None:
+        """
+        Compute and process the affinity matrix for graph-based semi-supervised learning.
+        This method constructs an affinity matrix by combining labeled and unlabeled
+        embeddings, applies thresholding to remove weak connections, and optionally
+        converts similarity to distance based on the specified strategy.
+        The processing pipeline includes:
+            1. Concatenation of labeled and unlabeled embeddings
+            2. Computation of the affinity matrix using the configured function
+            3. Optional thresholding to remove weak connections
+            4. Optional conversion to distance matrix based on strategy
+        The affinity matrix can be processed in different modes:
+            - 'diversity': Converts entire matrix to distance (1 - similarity)
+            - 'mixed': Converts specific submatrices (LL, UU, LU, UL) to distance
+        Finally, generates t-SNE visualizations comparing the original and processed
+        affinity matrices.
+        
+        Returns:
+            None: The computed affinity matrix is stored in self.A.
+        
+        Raises:
+            ValueError: If an invalid AM_threshold_strategy or AM_strategy is provided.
+        
+        Note:
+            - The threshold value is determined by get_A_threshold() method when
+              AM_threshold_strategy is 'mean', otherwise uses self.AM_threshold
+            - For 'rbfk' function, thresholding logic is inverted (values > threshold
+              become 1, else 0)
+        """
         
         logger.info(' => Computing Affinity Matrix...')
 
@@ -105,7 +150,38 @@ class GTG_off(ActiveLearner):
         logger.info(' DONE\n')
 
 
+
     def get_A_rbfk(self, concat_embedds: torch.Tensor, to_cpu = False) -> torch.Tensor:
+        """
+        Compute the RBF (Radial Basis Function) kernel adjacency matrix.
+        This method constructs an adaptive RBF kernel matrix based on the 
+        concatenated embeddings. The bandwidth (sigma) for each sample is 
+        determined by its distance to its 7th nearest neighbor, enabling 
+        adaptive kernel scaling.
+        
+        Args:
+            concat_embedds (torch.Tensor): A tensor of concatenated embeddings 
+                of shape (n_samples, embedding_dim), where n_samples is the 
+                number of samples and embedding_dim is the dimensionality 
+                of the embeddings.
+            to_cpu (bool, optional): If True, forces computation on CPU regardless 
+                of the model's device. If False (default), uses the model's 
+                configured device.
+        
+        Returns:
+            torch.Tensor: A square adjacency matrix of shape (n_samples, n_samples) 
+                with values in the range [0, 1]. The diagonal is filled with 0 
+                if self-loops are disabled (AM_self_loop=False), or 1 if 
+                self-loops are enabled.
+        
+        Raises:
+            ValueError: If concat_embedds has invalid dimensions.
+        
+        Note:
+            The sigma values are computed adaptively using the distance to the 
+            7th nearest neighbor, which is a common technique for creating 
+            data-dependent kernel bandwidths in graph-based learning tasks.
+        """
         
         device = torch.device('cpu') if to_cpu else self.device
         A_matrix = self.get_A_e_d(concat_embedds, to_cpu)
@@ -125,11 +201,43 @@ class GTG_off(ActiveLearner):
     
     
     def get_A_e_d(self, concat_embedds: torch.Tensor, to_cpu = False) -> torch.Tensor:
+        """
+        Computes the adjacency matrix from concatenated embeddings.
+
+        Calculates pairwise Euclidean distances between all embeddings in the
+        concatenated tensor using torch.cdist, clamps the values to the range
+        [0, 1], and sets the diagonal values based on the self-loop configuration.
+
+        Args:
+            concat_embedds (torch.Tensor): A tensor of concatenated embeddings
+                with shape (n, d) where n is the number of embeddings and d
+                is the embedding dimension.
+            to_cpu (bool, optional): If True, moves the resulting adjacency
+                matrix to CPU. If False, keeps it on the device. Defaults
+                to False.
+
+        Returns:
+            torch.Tensor: The adjacency matrix with values clamped to [0, 1]
+                and diagonal set to 0 if self-loops are disabled (AM_self_loop
+                is False), or 1 if self-loops are enabled (AM_self_loop is True).
+        """
         A = torch.cdist(concat_embedds, concat_embedds).to(torch.device('cpu') if to_cpu else self.device)
         return torch.clamp(A, min=0., max=1.).fill_diagonal_(0. if self.AM_self_loop else 1.)
 
 
+
     def get_A_cos_sim(self, concat_embedds: torch.Tensor, to_cpu = False) -> torch.Tensor:
+        """
+        Computes the cosine similarity matrix from concatenated embeddings.
+        
+        Args:
+            concat_embedds (torch.Tensor): Concatenated embeddings tensor.
+            to_cpu (bool, optional): If True, forces computation on CPU. Defaults to False.
+        
+        Returns:
+            torch.Tensor: Cosine similarity matrix (adjacency matrix) with values clamped to [0, 1].
+                The diagonal is filled with 1s if self-loops are enabled, else 0s.
+        """
         device = torch.device('cpu') if to_cpu else self.device
         normalized_embedding = F.normalize(concat_embedds, dim=-1).to(device)
         
@@ -139,12 +247,53 @@ class GTG_off(ActiveLearner):
         return A.fill_diagonal_(1. if self.AM_self_loop else 0.)
         
         
+
     def get_A_corr(self, concat_embedds: torch.Tensor, to_cpu = False) -> torch.Tensor:
+        """
+        Computes the correlation-based adjacency matrix from concatenated embeddings.
+
+        Calculates the Pearson correlation coefficient matrix for the given concatenated
+        embeddings, clamps the values to [0, 1] range, and sets the diagonal values
+        based on the self-loop configuration.
+
+        Args:
+            concat_embedds (torch.Tensor): Tensor of concatenated embeddings with shape
+                (num_nodes, feature_dim) used to compute pairwise correlations.
+            to_cpu (bool, optional): If True, moves the resulting adjacency matrix to CPU.
+                Defaults to False, keeping it on the device (self.device).
+
+        Returns:
+            torch.Tensor: Adjacency matrix of shape (num_nodes, num_nodes) with values
+                clamped to [0, 1]. The diagonal is set to 1.0 if self-loops are enabled
+                (AM_self_loop=True), otherwise 0.0.
+
+        Note:
+            The correlation matrix is computed using torch.corrcoef which treats rows
+            as observations and computes the correlation between columns.
+        """
         A = torch.corrcoef(concat_embedds).to(torch.device('cpu') if to_cpu else self.device)
         return torch.clamp(A, min=0., max=1.).fill_diagonal_(1. if self.AM_self_loop else 0.)
         
 
+
     def get_X(self) -> None:
+        """
+        Compute and initialize the X matrix for the GTG algorithm.
+        The X matrix serves as the initial probability/label matrix containing
+        information for both labelled and unlabelled samples:
+        - For labelled samples: one-hot encoded ground truth labels
+        - For unlabelled samples: uniform probability distribution across all classes
+        The matrix dimensions are:
+            - Rows: (num_labelled_samples + num_unlabelled_samples)
+            - Columns: number of classes in the dataset
+        
+        Returns:
+            None: The computed X matrix is stored in self.X as a torch.Tensor.
+        
+        Example:
+            >>> self.get_X()
+            >>> print(self.X.shape)  # (n_labelled + n_unlabelled, n_classes)
+        """
         logger.info(' => Computing X Matrix...')
         
         self.X: torch.Tensor = torch.zeros(
@@ -166,6 +315,30 @@ class GTG_off(ActiveLearner):
         
         
     def graph_trasduction_game(self) -> None:
+        """Runs the Graph Transduction Game (GTG) algorithm for semi-supervised learning.
+        This method performs label propagation on a graph structure, iteratively
+        updating the feature matrix X by propagating information from labeled
+        nodes to unlabeled nodes through the adjacency matrix A.
+        The algorithm runs until either:
+            - The convergence tolerance (gtg_tol) is reached, meaning the change in X
+            between iterations is below the threshold, or
+            - The maximum number of iterations (gtg_max_iter) is reached.
+        During each iteration:
+            - The feature matrix X is multiplied by the adjacency matrix A to propagate
+            information across the graph.
+            - X is row-normalized to maintain probability distributions.
+            - The entropy of unlabeled node predictions is recorded for analysis.
+        Logs the following information:
+            - Starting and ending predictions for unlabeled nodes (unique label counts).
+            - GTG accuracy on unlabeled nodes (computed as argmax comparison with true labels).
+        
+        Returns:
+            None: This method updates self.X in place and populates
+            self.unlab_entropy_hist with entropy values for each iteration.
+        
+        Raises:
+            None: Explicitly. Errors from tensor operations may propagate.
+        """
         
         self.get_A()
         self.get_X()
@@ -200,6 +373,34 @@ class GTG_off(ActiveLearner):
 
 
     def query(self, sample_unlab_subset: Subset, n_top_k_obs: int) -> Tuple[List[int], List[int]]:            
+        """Select top-k unlabeled observations based on Graph Transduction Game entropy.
+        This method performs active learning selection by executing the Graph Transduction
+        Game (GTG) algorithm on unlabeled data and selecting the observations with the
+        highest entropy measures.
+        
+        Args:
+            sample_unlab_subset (Subset): A PyTorch Subset containing the unlabeled
+                samples to be considered for selection.
+            n_top_k_obs (int): The number of top observations to select based on
+                entropy measures.
+        
+        Returns:
+            Tuple[List[int], List[int]]: A tuple containing:
+                - List[int]: Indices of the top-k selected unlabeled observations.
+                - List[int]: Corresponding random samples from the unlabeled subset.
+        
+        Raises:
+            Exception: If an unrecognized entropy computation strategy is specified.
+        
+        Notes:
+            - The method loads the best checkpoint before computing embeddings.
+            - Entropy history is computed over self.gtg_max_iter iterations.
+            - Two entropy strategies are supported: 'mean' (average entropy) and
+              'integral' (area under the entropy curve using trapezoid formula).
+            - The method saves an entropy history tensor for visualization purposes.
+            - GPU memory is cleaned up after processing by deleting intermediate
+              tensors and calling garbage collection.
+        """
         self.len_unlab_sample = len(sample_unlab_subset)
 
         dl_dict = dict(batch_size=self.batch_size, shuffle=False, pin_memory=True)           

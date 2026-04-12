@@ -2,9 +2,11 @@
 from models.BBone_Module import Master_Model
 from app.dataset import Cls_Datasets
 from train_evaluate.Train_DDP import train, train_ddp
-from utils import count_class_observation, plot_cumulative_train_results, set_seeds,\
-    create_class_dir, create_method_res_dir, plot_new_labelled_tsne, save_train_val_curves, write_csv,\
-    plot_classes_count_iterations, plot_entropy_iterations_classes
+from utils import (
+    count_class_observation, plot_cumulative_train_results, set_seeds,
+    create_class_dir, create_method_res_dir, plot_new_labelled_tsne, save_train_val_curves, write_csv,
+    plot_classes_count_iterations, plot_entropy_iterations_classes, get_device
+)
 from config import al_params
 
 from torch.utils.data import Subset, DataLoader
@@ -51,15 +53,23 @@ class ActiveLearner():
         self.best_check_filename: str = f'app/checkpoints/{self.ct_p["dataset_name"]}/{self.strategy_name}'
         
         self.world_size: int = self.ct_p["gpus"]
+        self.master_address: str = self.ct_p["master_address"]
+        self.master_port: str = self.ct_p["master_port"]
         
         self.path = f'results/{self.ct_p["exp_path"]}/{self.ct_p["dataset_name"]}/{self.ct_p["trial"]}/{self.strategy_name}'
-        create_method_res_dir(self.path)
+        create_method_res_dir(path=self.path)
         
         # save initial labelled images
-        self.save_labelled_images(self.labelled_indices)
+        self.save_labelled_images(new_labelled_idxs=self.labelled_indices)
         
         self.count_classes: Dict[int, List[int]] = {}
-        self.count_classes[self.iter * al_params["n_top_k_obs"]] = list(count_class_observation(self.dataset.classes, Subset(self.dataset.train_ds, self.labelled_indices)).values())
+        self.count_classes[self.iter * al_params["n_top_k_obs"]] = list(
+            count_class_observation(
+                classes=self.dataset.classes, 
+                dataset=Subset(self.dataset.train_ds, self.labelled_indices)).values()
+        )
+
+        # save the initial count classes in the csv file
         write_csv(
             filename = f'{self.ct_p["task"]}_count_classes.csv',
             exp_path = self.ct_p["exp_path"],
@@ -71,8 +81,27 @@ class ActiveLearner():
         
     
     def save_labelled_images(self, new_labelled_idxs: List[int]) -> None:
+        """Save newly labelled images to disk for visual analysis.
+        Iterates through the newly labelled images from the active learning
+        iteration and saves them to class-specific directories within the
+        iteration folder. Handles both classification and other tasks (e.g.,
+        segmentation) by extracting unique labels from ground truth annotations
+        when applicable.
+        
+        Args:
+            new_labelled_idxs: List of indices corresponding to the newly labelled
+                images in the unlabeled training dataset.
+        
+        Returns:
+            None.
+        
+        Raises:
+            OSError: If there are issues creating directories or saving files.
+
+        """
         logger.info(f' => Iteration {self.iter} Method {self.strategy_name} - Saving the new labelled images for further visual analysis...')
-        create_class_dir(self.path, self.iter, self.dataset.classes)
+        create_class_dir(path=self.path, iter=self.iter, classes=self.dataset.classes)
+        
         for idx_top, (_, img, gt) in enumerate(Subset(self.dataset.unlab_train_ds, new_labelled_idxs)): # type: ignore
             if self.ct_p["task"] != 'clf': 
                 unique_labs = np.unique(np.array([labs[-1] for labs in gt]))
@@ -85,6 +114,29 @@ class ActiveLearner():
         
     
     def get_rand_unlab_sample(self) -> None:
+        """
+        Get a random sample of unlabelled indices for active learning.
+        Selects a random subset of unlabelled indices to be used in the current
+        active learning iteration. The selection process depends on the task type.
+        For classification tasks ('clf'):
+            - Sets a reproducible seed based on dataset_id, trial number, and
+              current iteration to ensure deterministic sampling across trials.
+            - Randomly permutes the unlabelled indices and selects the first
+              'unlab_sample_dim' indices as the random sample.
+            - Logs the seed and last 10 permuted indices for debugging.
+            - Resets the seed to its original value after sampling.
+            - If 'temp_unlab_pool' is True, removes the selected samples from
+              the unlabelled indices pool for the current iteration.
+        For non-classification tasks:
+            - Returns all unlabelled indices as the random sample.
+        
+        Returns:
+            None: Updates self.rand_unlab_sample with the selected indices
+                  and optionally modifies self.unlabelled_indices.
+        
+        Raises:
+            KeyError: If required keys are missing in al_params or ct_p dictionaries.
+        """
         if self.ct_p["task"] == 'clf':
             # set seed for reproducibility            
             seed = self.dataset.dataset_id * (self.ct_p["trial"] * al_params["al_iters"] + (self.iter - 1))
@@ -103,15 +155,23 @@ class ActiveLearner():
                 # removing the whole observation sample fromt the unlabelled indices list
                 for idx in self.rand_unlab_sample: self.unlabelled_indices.remove(idx) # - 10000
             
-        
         else: self.rand_unlab_sample = self.unlabelled_indices
             
     
     def load_best_checkpoint(self):
-        if dist.is_available():
-            if self.world_size > 1: device = 'cuda:0'
-            else: device = 'cuda' 
-        else: device = 'cpu'
+        """Load the best model checkpoint from disk.
+
+        Determines the appropriate device (CUDA or CPU) based on the distributed
+        training configuration and world size, then loads the corresponding
+        checkpoint file. The model state dictionary is restored from the
+        checkpoint.
+
+        Raises:
+            FileNotFoundError: If the checkpoint file does not exist.
+            RuntimeError: If the checkpoint file is corrupted or missing
+                required keys (e.g., 'state_dict').
+        """
+        device = get_device(n_gpus=self.world_size)
 
         filename = f'{self.best_check_filename}_{device}.pth.tar'
         checkpoint: Dict = torch.load(filename, map_location=self.device)
@@ -119,8 +179,29 @@ class ActiveLearner():
         self.model.load_state_dict(checkpoint["state_dict"])
             
     
-    def get_embeddings(self, dataloader: DataLoader, dict_to_modify: Dict[str, Any], embedds2cpu = False) -> None:
-                
+    def get_embeddings(self, dataloader: DataLoader, dict_to_modify: Dict[str, Any], embedds2cpu: bool = False) -> None:
+        """Extract embeddings and model outputs from a dataloader.
+
+        Runs the model in evaluation mode to extract embeddings, outputs,
+        module outputs, labels, and indices from the given dataloader.
+        Results are concatenated and stored in the provided dictionary.
+
+        Args:
+            dataloader: DataLoader containing the dataset to process.
+            dict_to_modify: Dictionary to store extracted data. Expected keys
+                may include 'embedds', 'outs', 'module_out', 'labels', and/or
+                'idxs' depending on desired outputs.
+            embedds2cpu: If True, moves embeddings to CPU before concatenating.
+                Defaults to False.
+
+        Returns:
+            None. The dict_to_modify dictionary is modified in place.
+
+        Raises:
+            AttributeError: If 'module_out' is requested but no additional
+                module is specified in the model.
+        """
+                    
         self.model.eval()
 
         # again no gradients needed
@@ -153,12 +234,33 @@ class ActiveLearner():
 
                 if 'labels' in dict_to_modify: dict_to_modify["labels"] = torch.cat((dict_to_modify["labels"], labels), dim=0)
                 if 'idxs' in dict_to_modify: dict_to_modify["idxs"] = torch.cat((dict_to_modify["idxs"], idxs), dim=0)
-                
-                
 
     
     
-    def save_tsne(self, idxs_new_labels: List[int], d_labels: Dict[str, int], al_iter: int, gtg_result_prediction = None) -> None:
+    def save_tsne(
+            self, 
+            idxs_new_labels: List[int], 
+            d_labels: Dict[str, int], 
+            al_iter: int, 
+            gtg_result_prediction = None
+        ) -> None:
+        """Saves a t-SNE visualization of the embeddings for the current active learning iteration.
+        This method generates a t-SNE plot showing the labelled, unlabelled, and newly labelled
+        observations for visualization purposes during active learning. It loads the best model
+        checkpoint, extracts embeddings for both labelled and unlabelled training data, and
+        creates a visualization using the provided parameters.
+        Args:
+            idxs_new_labels (List[int]): Indices of the newly labelled samples in this iteration.
+            d_labels (Dict[str, int]): Dictionary mapping class names to their corresponding integer labels.
+            al_iter (int): The current active learning iteration number.
+            gtg_result_prediction (optional): Predictions from the GTG model. Defaults to None.
+        Returns:
+            None: This method saves the t-SNE plot to disk and does not return any value.
+        Note:
+            - This method loads the best checkpoint before extracting embeddings.
+            - It requires the dataset to have 'unlab_train_ds' attribute and 'labelled_indices'.
+            - The plot is saved to the experiment path specified in the configuration.
+        """
         # plot the tsne graph for each iteration
         
         logger.info(' => Saving the TSNE embeddings plot with labelled, unlabelled and new labelled observations')
@@ -194,7 +296,36 @@ class ActiveLearner():
         
         
         
-    def train_evaluate_save(self, lab_obs: int, iter: int, results_format: Dict[str, Dict[str, List[float]]]) -> Dict[str, Any]:
+    def train_evaluate_save(
+            self, 
+            lab_obs: int, 
+            iter: int,
+            results_format: Dict[str, Dict[str, List[float]]]
+        ) -> Dict[str, Any]:
+        """
+        Train, evaluate, and save results for the current iteration.
+        This method executes the training process, evaluates the model on test data,
+        and saves the results to CSV and curve files for further analysis.
+        Args:
+            lab_obs (int): Number of labeled observations used in this iteration.
+            iter (int): Current iteration number in the active learning loop.
+            results_format (Dict[str, Dict[str, List[float]]]): Dictionary containing
+                the structure for storing results, with keys "train" and "test" mapping
+                to metric names and their value lists.
+        Returns:
+            Dict[str, Any]: Dictionary containing training results for the current
+                iteration, keyed by metric names.
+        Raises:
+            Exception: Re-raises any exception from the training process in distributed
+                or non-distributed mode.
+        Note:
+            - If self.world_size > 1, runs distributed training using DDP (Distributed
+                Data Parallel) with multiprocessing spawning.
+            - For single GPU training, calls train() directly.
+            - Results are saved to CSV file named '{task}_results.csv' in the
+                experiment path.
+            - Training and validation curves are saved using save_train_val_curves().
+        """
         
         test_res_keys = list(results_format["test"].keys())
         train_res_keys = list(results_format["train"].keys())
@@ -211,8 +342,8 @@ class ActiveLearner():
         # if we are using multiple gpus
         if self.world_size > 1:
             
-            os.environ["MASTER_ADDR"] = "xxxxxxxxxx" # -> replace with the correct address
-            os.environ["MASTER_PORT"] = "yyyyyyyyyy" # -> repalce with a free port
+            os.environ["MASTER_ADDR"] = self.master_address
+            os.environ["MASTER_PORT"] = self.master_port
             
             # Pipe for the itra-process communication of the results
             parent_conn, child_conn = mp.Pipe()
@@ -243,6 +374,7 @@ class ActiveLearner():
         
         logger.info(f'TESTING RESULTS -> {iter_test_results}')
         
+        # save the results in the csv file for further analysis and plotting of cumulative results after the end of all iterations
         write_csv(
             filename = f'{self.ct_p["task"]}_results.csv',
             exp_path = self.ct_p["exp_path"],
@@ -251,14 +383,48 @@ class ActiveLearner():
             values = [self.strategy_name, self.ct_p["trial"], lab_obs] + list(iter_test_results.values())
         )
         
-        save_train_val_curves(list(self.t_p["results_dict"]["train"].keys()), iter_train_results, self.strategy_name,
-                              self.ct_p["exp_path"], self.ct_p["dataset_name"], iter, self.ct_p["trial"])
+        # save the train and val curves for the current iteration
+        save_train_val_curves(
+            list_dict_keys=list(self.t_p["results_dict"]["train"].keys()), 
+            results_info=iter_train_results,
+            strategy_name=self.strategy_name,
+            exp_path=self.ct_p["exp_path"],
+            dataset_name=self.ct_p["dataset_name"],
+            iter=iter,
+            trial=self.ct_p["trial"]
+        )
 
         return iter_train_results
         
         
     
-    def update_sets(self, overall_topk: List[int]) -> None:        
+    def update_sets(self, overall_topk: List[int]) -> None:
+        """
+        Update the labelled and unlabelled indices after an active learning iteration.
+
+        This method updates the internal datasets by moving samples from the unlabelled
+        pool to the labelled pool based on the query strategy results. It also handles
+        the temporary unlabelled pool if configured, saves newly labelled images for
+        visual analysis, and performs sanity checks to ensure no index overlap.
+
+        Args:
+            overall_topk: List of indices corresponding to the samples selected by the
+                query strategy to be added to the labelled set.
+
+        Returns:
+            None. Updates self.labelled_indices, self.unlabelled_indices, and
+                optionally self.temp_unlab_pool in place.
+
+        Raises:
+            Exception: If there is a non-empty intersection between the labelled,
+                unlabelled, or temp_unlab_pool index sets (indicating data leakage).
+
+        Note:
+            - If temp_unlab_pool is enabled, the randomly sampled unlabelled indices
+              are temporarily removed and then re-added after the iteration.
+            - The method logs the new lengths of all index lists for debugging.
+        """
+            
         # save the new labelled images to further visual analysis
         self.save_labelled_images(overall_topk)
         
@@ -304,9 +470,29 @@ class ActiveLearner():
 
         
         
-    #def run(self) -> Tuple[Dict[str, List[float]], Dict[int, Dict[str, int]]]:
     def run(self) -> Dict[str, List[float]]:
-                
+        """
+        Run the active learning loop for the current strategy.
+
+        Executes the complete active learning process across multiple iterations,
+        including training, evaluation, query strategy selection, and result saving.
+
+        Returns:
+            Dict[str, List[float]]: A dictionary containing test results for each
+                metric, where keys are metric names and values are lists of results
+                across all iterations.
+
+        Raises:
+            Exception: If any critical error occurs during training, evaluation,
+                or query strategy execution.
+
+        Note:
+            - The loop runs for 'al_iters' iterations as defined in al_params.
+            - Each iteration trains the model, queries new labels, and updates
+              the labelled/unlabelled sets.
+            - Results are saved to CSV and visualization plots are generated.
+        """
+            
         results_format = copy.deepcopy(self.t_p["results_dict"])
                 
         # start of the loop
@@ -321,7 +507,9 @@ class ActiveLearner():
             logger.info(' DONE\n')
             
             self.train_results[self.iter] = self.train_evaluate_save(
-                al_params["init_lab_obs"] + ((self.iter - 1) * al_params["n_top_k_obs"]), self.iter, results_format
+                lab_obs=al_params["init_lab_obs"] + ((self.iter - 1) * al_params["n_top_k_obs"]),
+                iter=self.iter, 
+                results_format=results_format
             )
             
             logger.info(' START QUERY PROCESS\n')
@@ -331,18 +519,27 @@ class ActiveLearner():
                 Subset(self.dataset.unlab_train_ds, self.rand_unlab_sample), al_params["n_top_k_obs"]
             )
             
-            d_labels = count_class_observation(self.dataset.classes, self.dataset.train_ds, topk_idx_obs)
+            d_labels = count_class_observation(
+                classes=self.dataset.classes, 
+                dataset=self.dataset.train_ds, 
+                topk_idx_obs=topk_idx_obs
+            )
             logger.info(f' Number of observations per class added to the labelled set:\n {d_labels}\n')
             
             # Saving the tsne embeddings plot
             if 'GTG_off' in self.method_name:
                 # if we are performing GTG Offline plot also the GTG predictions in the TSNE plot 
-                self.save_tsne(idxs_new_labels, d_labels, self.iter, self.gtg_result_prediction) # type: ignore
+                self.save_tsne(
+                    idxs_new_labels=idxs_new_labels, 
+                    d_labels=d_labels, 
+                    al_iter=self.iter, 
+                    gtg_result_prediction=self.gtg_result_prediction
+                )
             
-            else: self.save_tsne(idxs_new_labels, d_labels, self.iter)
+            else: self.save_tsne(idxs_new_labels=idxs_new_labels, d_labels=d_labels, al_iter=self.iter)
 
             # modify the datasets and dataloader and plot the tsne
-            self.update_sets(topk_idx_obs)
+            self.update_sets(overall_topk=topk_idx_obs)
             
             self.iter += 1
 
@@ -360,14 +557,31 @@ class ActiveLearner():
                 
         # plotting the number of classes in the train dataset for each trial
         if al_params["al_iters"] > 1:
-            if self.dataset.n_classes <= 10: plot_classes_count_iterations(self.count_classes, self.dataset.classes, self.strategy_name, self.ct_p["exp_path"], self.ct_p["dataset_name"], self.ct_p["trial"])
-            plot_entropy_iterations_classes(self.count_classes, self.strategy_name, self.ct_p["exp_path"], self.ct_p["dataset_name"], self.ct_p["trial"])
+            if self.dataset.n_classes <= 10: plot_classes_count_iterations(
+                count_classes=self.count_classes, 
+                classes=self.dataset.classes,
+                strategy_name=self.strategy_name, 
+                exp_path=self.ct_p["exp_path"], 
+                dataset_name=self.ct_p["dataset_name"],
+                trial=self.ct_p["trial"]
+            )
+            plot_entropy_iterations_classes(
+                count_classes=self.count_classes, 
+                strategy_name=self.strategy_name, 
+                exp_path=self.ct_p["exp_path"], 
+                dataset_name=self.ct_p["dataset_name"], 
+                trial=self.ct_p["trial"]
+            )
         
         # plotting the cumulative train results
-        plot_cumulative_train_results(list(self.t_p["results_dict"]["train"].keys()), 
-                                       self.train_results, self.strategy_name, len(self.train_results[1]["train_pred_loss"]),
-                                       self.ct_p["exp_path"], self.ct_p["dataset_name"], 
-                                       self.ct_p["trial"])
-        
+        plot_cumulative_train_results(
+            keys=list(self.t_p["results_dict"]["train"].keys()), 
+            train_results=self.train_results, 
+            strategy_name=self.strategy_name, 
+            n_pred_loss=len(self.train_results[1]["train_pred_loss"]),
+            exp_path=self.ct_p["exp_path"], 
+            dataset_name=self.ct_p["dataset_name"], 
+            trial=self.ct_p["trial"]
+        )
         
         return results_format["test"]

@@ -93,6 +93,7 @@ class Resnet_Decoder(nn.Module):
         width_per_group: int = 64,
         norm_layer: Optional[Callable[..., nn.Module]] = None
     ) -> None:
+        
         super().__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d

@@ -19,6 +19,23 @@ logger = logging.getLogger(__name__)
 
 
 def make_random_split(dataset: Dataset, perc_val: float, batch_size: int) -> Tuple[DataLoader, DataLoader]:
+    """
+    Split a dataset into training and validation sets randomly.
+    
+    Args:
+        dataset: The dataset to split.
+        perc_val: The proportion of the dataset to use for validation (e.g., 0.2 for 20%).
+        batch_size: The batch size for the data loaders.
+    
+    Returns:
+        A tuple containing:
+            - train_dl: DataLoader for the training set.
+            - val_dl: DataLoader for the validation set.
+    
+    Raises:
+        TypeError: If dataset is not a valid Dataset object.
+        ValueError: If perc_val is not in range [0, 1] or batch_size is not positive.
+    """
     ds_len = len(dataset) # type: ignore
     val_ds_len = int(ds_len * perc_val)
     
@@ -31,7 +48,39 @@ def make_random_split(dataset: Dataset, perc_val: float, batch_size: int) -> Tup
     return train_dl, val_dl
     
 
-def fit_ae(model: BackBone_Decoder, device: torch.device, train_ds: Dataset, perc_val=0.2, num_epochs=200, bs=128, lr=0.001, momentum=0.5):
+def fit_ae(
+        model: BackBone_Decoder, 
+        device: torch.device, 
+        train_ds: Dataset, 
+        perc_val=0.2, 
+        num_epochs=200, 
+        bs=128, 
+        lr=0.001, 
+        momentum=0.5
+    ) -> None:
+    """Train an autoencoder model.
+    Args:
+        model (BackBone_Decoder): The autoencoder model to train.
+        device (torch.device): The device to train on (CPU or CUDA).
+        train_ds (Dataset): The training dataset.
+        perc_val (float, optional): Proportion of data to use for validation.
+            Defaults to 0.2 (20%).
+        num_epochs (int, optional): Number of training epochs. Defaults to 200.
+        bs (int, optional): Batch size. Defaults to 128.
+        lr (float, optional): Learning rate. Defaults to 0.001.
+        momentum (float, optional): Momentum for SGD optimizer (not used with Adam).
+            Defaults to 0.5.
+    Returns:
+        dict: A dictionary containing training history with keys 'tr_loss'
+            and 'val_loss', each being a list of loss values per epoch.
+    Raises:
+        AssertionError: If any parameter is out of valid range (lr not in (0,1),
+            num_epochs <= 0, bs <= 0, or momentum not in [0,1)).
+    Example:
+        >>> model = BackBone_Decoder()
+        >>> device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        >>> history = fit_ae(model, device, train_dataset)
+    """
 
     assert 0 < lr < 1 and num_epochs > 0 and bs > 0 and 0 <= momentum < 1
     
@@ -85,7 +134,24 @@ def fit_ae(model: BackBone_Decoder, device: torch.device, train_ds: Dataset, per
 
 
 
-def evaluate(model: BackBone_Decoder, criterion: nn.MSELoss, device: torch.device, val_dl: DataLoader) -> float:
+def evaluate(
+        model: BackBone_Decoder, 
+        criterion: nn.MSELoss, 
+        device: torch.device, 
+        val_dl: DataLoader
+    ) -> float:
+    """
+    Evaluates the autoencoder model on the validation dataset.
+    
+    Args:
+        model: The backbone decoder model to evaluate.
+        criterion: The loss function (MSELoss) used to compute reconstruction error.
+        device: The torch device (CPU or CUDA) to run computations on.
+        val_dl: DataLoader containing the validation dataset.
+    
+    Returns:
+        float: The average validation loss computed over the entire validation set.
+    """
 
     model.eval()
 
@@ -103,7 +169,35 @@ def evaluate(model: BackBone_Decoder, criterion: nn.MSELoss, device: torch.devic
 
 
 
-def get_initial_sample_higher_MSE(model: BackBone_Decoder, dl: DataLoader, device: torch.device, n_lab_obs: int) -> List[int]:
+def get_initial_sample_higher_MSE(
+        model: BackBone_Decoder, 
+        dl: DataLoader, 
+        device: torch.device, 
+        n_lab_obs: int
+    ) -> List[int]:
+    """
+    Select initial samples with the highest reconstruction error.
+    This function evaluates the autoencoder model on the provided data loader
+    and selects the samples with the highest mean squared error (MSE) between
+    the input images and their reconstructions. These samples represent the
+    hardest cases for the model to reconstruct, which can be useful for
+    active learning or curriculum learning strategies.
+    
+    Args:
+        model: The autoencoder model (BackBone_Decoder) used for reconstruction.
+        dl: DataLoader containing the dataset to evaluate. Each batch should
+            contain (indices, images, labels, _) tuples.
+        device: The torch device (CPU or CUDA) to run the model on.
+        n_lab_obs: The number of samples to select with the highest MSE.
+    
+    Returns:
+        List[int]: A list of integer indices corresponding to the samples with
+        the highest reconstruction errors.
+    
+    Example:
+        >>> indices = get_initial_sample_higher_MSE(model, data_loader, torch.device('cuda'), 10)
+        >>> print(f"Selected {len(indices)} hardest samples")
+    """
     
     model = model.to(device)
     model.eval()
@@ -128,7 +222,31 @@ def get_initial_sample_higher_MSE(model: BackBone_Decoder, dl: DataLoader, devic
 
 
 
-def get_initial_sample_farthest_KMeans(model: BackBone_Decoder, dl: DataLoader, device:torch.device, n_classes: int, n_obs_per_class: int) -> List[int]:
+def get_initial_sample_farthest_KMeans(
+        model: BackBone_Decoder, 
+        dl: DataLoader, 
+        device:torch.device, 
+        n_classes: int, 
+        n_obs_per_class: int
+    ) -> List[int]:
+    """
+    Select initial samples using farthest point sampling per KMeans cluster.
+    This function extracts embeddings from the unlabeled data using the provided
+    model, performs KMeans clustering to identify n_classes clusters, and then
+    selects the farthest n_obs_per_class samples from each cluster centroid.
+    Args:
+        model (BackBone_Decoder): The autoencoder model with an encoder that
+            provides embeddings.
+        dl (DataLoader): DataLoader containing unlabeled images.
+        device (torch.device): The device (CPU or CUDA) to run the model on.
+        n_classes (int): The number of clusters for KMeans.
+        n_obs_per_class (int): The number of farthest samples to select per cluster.
+    Returns:
+        List[int]: A list of indices corresponding to the farthest samples
+            selected from each cluster.
+    Raises:
+        ValueError: If n_obs_per_class is greater than the size of any cluster.
+    """
      
     model = model.to(device)
     model.eval()

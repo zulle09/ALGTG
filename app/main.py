@@ -10,7 +10,7 @@ import torch.distributed as dist
 from models.BBone_Module import Master_Model
 
 from init import get_backbone, get_ll_module_params, get_masters, get_strategies_object, dict_backbone
-from utils import create_directory, create_exp_path, plot_trail_acc, plot_res_std_mean, set_seeds, save_yamal
+from utils import create_directory, create_exp_path, plot_trail_acc, plot_res_std_mean, set_seeds, save_yamal, get_device
 
     	
 from config import cls_config, al_params
@@ -35,6 +35,8 @@ def get_args() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser()
     parser.add_argument('-gpus', '--gpus', type=int, required=False, default=1, help='Number of GPUs to use during training')
+    parser.add_argument('-ma', '--master_address', type=str, required=False, default='localhost', help='Master address for distributed training')
+    parser.add_argument('-mp', '--master_port', type=str, required=False, default='12355', help='Master port for distributed training')
     parser.add_argument('-m', '--methods', type=str, nargs='+', required=True, choices=[
             'random', 'entropy', 'coreset', 'badge', 'bald', 'cdal', 'tavaal', 'alphamix', 'tidal',
             'll', 'gtg', 'll_gtg', 'llmlp_gtg', 'lsmlps_gtg', 'lsmlpsA_gtg', 'lstmreg_gtg', 'lstmbc_gtg'
@@ -74,8 +76,13 @@ def get_args() -> argparse.Namespace:
 
 
 
-def run_strategies(ct_p: Dict[str, Any], t_p: Dict[str, Any], gtg_p: Dict[str, Any],
-                   Masters: Dict[str, Master_Model], methods: List[str]) -> Tuple[Dict[str, Dict[str, List[float]]], List[int]]:
+def run_strategies(
+        ct_p: Dict[str, Any], 
+        t_p: Dict[str, Any], 
+        gtg_p: Dict[str, Any],
+        Masters: Dict[str, Master_Model], 
+        methods: List[str]
+    ) -> Tuple[Dict[str, Dict[str, List[float]]], List[int]]:
     """
     Run the selected active learning strategies and collect their results.
     This function builds the strategy objects from the provided configuration,
@@ -111,41 +118,6 @@ def run_strategies(ct_p: Dict[str, Any], t_p: Dict[str, Any], gtg_p: Dict[str, A
     return results, n_lab_obs               
 
 
-def get_device(args: argparse.Namespace) -> torch.device:
-    """Select the best available computation device.
-
-    Priority order:
-        1. CUDA
-        2. MPS (macOS)
-        3. CPU
-
-    Args:
-        args: Parsed CLI arguments. Expects a `gpus` attribute for logging.
-
-    Returns:
-        The selected torch device.
-    """
-    if torch.cuda.is_available():
-        logger.info(f"Using {args.gpus} / {torch.cuda.device_count()} of the available GPUs")
-        device = torch.device("cuda")
-
-        if dist.is_available():
-            logger.info("Distributed package is available")
-        if dist.is_nccl_available():
-            logger.info("NCCL backend available")
-
-    elif torch.backends.mps.is_available():
-        logger.info("CUDA is not available. Using MPS (macOS)")
-        device = torch.device("mps")
-
-    else:
-        logger.info("CUDA and MPS are not available. Using CPU")
-        device = torch.device("cpu")
-
-    logger.info(f"Application running on {device}\n")
-    return device
-
-
 
 def main() -> None:
     """Run the active learning benchmark workflow.
@@ -162,7 +134,7 @@ def main() -> None:
     args = get_args()
     
     exp_path = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    create_directory(f'results/{exp_path}')
+    create_directory(dir=f'results/{exp_path}')
     
     logging.basicConfig(filename = f'results/{exp_path}/exp_log.log',
                     filemode = 'a',
@@ -172,7 +144,7 @@ def main() -> None:
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    device = get_device(args)
+    device = get_device(n_gpus=args.gpus)
     
     # setting seed and deterministic behaviour of pytorch for reproducibility
     set_seeds()
@@ -200,7 +172,12 @@ def main() -> None:
         logger.info(f'----------------------- RUNNING ACTIVE LEARNING BENCHMARK ON {dataset_name} -----------------------\n')
         
         Dataset = Cls_Datasets(dataset_name) # get the dataset
-        BBone = get_backbone(Dataset.n_classes, Dataset.n_channels, dict_backbone[dataset_name], Dataset.image_size) # the backbone is the same for all
+        BBone = get_backbone(
+            n_classes=Dataset.n_classes, 
+            n_channels=Dataset.n_channels, 
+            backbone_config=dict_backbone[dataset_name], 
+            image_size=Dataset.image_size
+        ) # the backbone is the same for all
 
         # create gtg dictionary parameters
         gtg_module_params = dict(
@@ -209,13 +186,21 @@ def main() -> None:
             device = device
         )
         
-        ll_module_params = get_ll_module_params(Dataset.image_size, dataset_name) # create learning loss dictionary parameters
+        ll_module_params = get_ll_module_params(image_size=Dataset.image_size, dataset_name=dataset_name) # create learning loss dictionary parameters
             
-        Masters = get_masters(args.methods, BBone, ll_module_params, gtg_module_params, dataset_name, Dataset.n_classes) # obtain the master models
+        Masters = get_masters(
+            methods=args.methods, 
+            BBone=BBone, 
+            ll_module_params=ll_module_params, 
+            gtg_module_params=gtg_module_params, 
+            dataset_name=dataset_name, 
+            n_classes=Dataset.n_classes
+        ) # obtain the master models
                                                 
         common_training_params = {
             'device': device, 'exp_path': exp_path,
-            'dataset_name': dataset_name, 'gpus': args.gpus,
+            'dataset_name': dataset_name, 'gpus': args.gpus, 
+            'master_address': args.masted_address, 'master_port': args.master_port,
             'temp_unlab_pool': args.temp_unlab_pool, 'bbone_pre_train': args.bbone_pre_train,
         }
         
@@ -227,33 +212,49 @@ def main() -> None:
             
             logger.info(f'----------------------- SAMPLE ITERATION {trial + 1} / {args.trials} -----------------------\n')
             
-            create_exp_path(exp_path, dataset_name, str(trial))
+            create_exp_path(exp_path=exp_path, dataset_name=dataset_name, trial=str(trial))
             
             #intial_weights = Dataset.get_initial_subsets(device)  # type: ignore
             if args.cold_start_strategy != 'none':
                 # adding the initial weights to the common_training_params to be loaded in the backbnone
-                bbone_init_weights = Dataset.get_initial_subsets_cold_start(device, args.cold_start_strategy) # type: ignore 
+                bbone_init_weights = Dataset.get_initial_subsets_cold_start(device=device, strategy=args.cold_start_strategy) # type: ignore 
                 common_training_params["bbone_init_weights"] = bbone_init_weights if args.bbone_pre_train else None
             else: 
-                Dataset.get_initial_subsets(trial)
+                Dataset.get_initial_subsets(trial_id=trial)
                 common_training_params["bbone_init_weights"] = None
 
             results, n_lab_obs = run_strategies(
-                ct_p = {**common_training_params, 'Dataset': Dataset}, t_p = cls_config, gtg_p = gtg_params, Masters = Masters, methods = args.methods
+                ct_p = {**common_training_params, 'Dataset': Dataset},
+                t_p = cls_config,
+                gtg_p = gtg_params,
+                Masters = Masters,
+                methods = args.methods
             )
             
-            plot_trail_acc(dataset_name, trial, results, n_lab_obs, exp_path,
-                             list(cls_config["results_dict"]["test"].keys())[0],
-                             plot_png_name=f'{dataset_name}/{trial}/results.png')
+            plot_trail_acc(
+                dataset_name=dataset_name, 
+                trial=trial, 
+                results=results, 
+                n_lab_obs=n_lab_obs, 
+                exp_path=exp_path,
+                key=list(cls_config["results_dict"]["test"].keys())[0],
+                plot_png_name=f'{dataset_name}/{trial}/results.png'
+            )
         
-        plot_res_std_mean(exp_path, dataset_name)
+        plot_res_std_mean(exp_path=exp_path, dataset_name=dataset_name)
 
         del common_training_params["trial"]
         # saving yamal configuration file
         save_yamal(
-            common_training_params, 
-            {'epochs': cls_config['epochs'], 'datasets_optim': cls_config[dataset_name]}, 
-            al_params, gtg_params, exp_path, dataset_name
+            common_training_params=common_training_params, 
+            task_params={
+                'epochs': cls_config['epochs'], 
+                'datasets_optim': cls_config[dataset_name]
+            }, 
+            al_params=al_params, 
+            gtg_params=gtg_params, 
+            exp_path=exp_path, 
+            dataset_name=dataset_name
         )
             
 
