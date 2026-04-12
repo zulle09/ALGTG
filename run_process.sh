@@ -2,7 +2,6 @@
 
 conda activate algtg
 
-#lsmlps_gtg lstmreg_gtg lstmbc_gtg
 
 #python3 app/main.py -gpus 1 -m lsmlps_gtg -ds cifar10 -tr 1 -am corr -am_ts mean -e_s mean -gtg_iter 10 #-am_s uncertanity #--temp_unlab_pool
 #python3 app/main.py -gpus 1 -m lsmlps_gtg llmlp_gtg lstmreg_gtg lstmbc_gtg -ds cifar10 -tr 1 -am corr -am_ts mean -e_s mean -gtg_iter 10 #-am_s uncertanity #--temp_unlab_pool
@@ -20,4 +19,5 @@ conda activate algtg
 
 
 #python3 app/main.py -gpus 1 -m lsmlps_gtg -ds cifar10 -tr 5 -am corr -am_ts mean -e_s mean -gtg_iter 10 #-am_s uncertanity #--temp_unlab_pool
-python3 app/main.py -gpus 1 -m lsmlpsA_gtg -ds cifar10 -tr 5 -am corr -am_ts mean -e_s mean -gtg_iter 10 #-am_s uncertanity #--temp_unlab_pool
+#python3 app/main.py -gpus 1 -m lsmlpsA_gtg -ds cifar10 -tr 5 -am corr -am_ts mean -e_s mean -gtg_iter 10 #-am_s uncertanity #--temp_unlab_pool
+python app/main.py --help

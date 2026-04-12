@@ -5,7 +5,7 @@ import torch.nn as nn
 from models.backbones.ResNet18 import ResNet
 from models.backbones.VGG import VGG
 
-from app.models.modules.GTG.GTG_Cls import GTGModule
+from models.modules.GTG.GTG_Cls import GTGModule
 from models.modules.LossNet import LossNet
 
 import logging

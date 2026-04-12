@@ -1,5 +1,5 @@
 
-from app.models.modules.GTG.GTG_Cls import GTGModule
+from models.modules.GTG.GTG_Cls import GTGModule
 from models.modules.LossNet import LossNet
 from models.backbones.ResNet18 import ResNet, ResNet18
 from models.backbones.VGG import VGG, VGG16_bn
