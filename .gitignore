@@ -4,4 +4,5 @@
 *.csv
 *.png
 *.log
+.*vscode/
 git_key.md

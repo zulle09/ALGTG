@@ -174,8 +174,8 @@ def main() -> None:
         BBone = get_backbone(
             n_classes=Dataset.n_classes, 
             n_channels=Dataset.n_channels, 
-            backbone_config=dict_backbone[dataset_name], 
-            image_size=Dataset.image_size
+            bbone=dict_backbone[dataset_name], 
+            img_size=Dataset.image_size
         ) # the backbone is the same for all
 
         # create gtg dictionary parameters
@@ -199,7 +199,7 @@ def main() -> None:
         common_training_params = {
             'device': device, 'exp_path': exp_path,
             'dataset_name': dataset_name, 'gpus': args.gpus, 
-            'master_address': args.masted_address, 'master_port': args.master_port,
+            'master_address': args.master_address, 'master_port': args.master_port,
             'temp_unlab_pool': args.temp_unlab_pool, 'bbone_pre_train': args.bbone_pre_train,
         }
         
@@ -211,7 +211,7 @@ def main() -> None:
             
             logger.info(f'----------------------- SAMPLE ITERATION {trial + 1} / {args.trials} -----------------------\n')
             
-            create_exp_path(exp_path=exp_path, dataset_name=dataset_name, trial=str(trial))
+            create_exp_path(exp_path=exp_path, dataset_name=dataset_name, iter=str(trial))
             
             #intial_weights = Dataset.get_initial_subsets(device)  # type: ignore
             if args.cold_start_strategy != 'none':
@@ -233,7 +233,7 @@ def main() -> None:
             plot_trail_acc(
                 dataset_name=dataset_name, 
                 trial=trial, 
-                results=results, 
+                methods_results=results, 
                 n_lab_obs=n_lab_obs, 
                 exp_path=exp_path,
                 key=list(cls_config["results_dict"]["test"].keys())[0],

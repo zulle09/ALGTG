@@ -10,7 +10,6 @@ from utils import (
 from config import al_params
 
 from torch.utils.data import Subset, DataLoader
-import torch.distributed as dist
 import torch.multiprocessing as mp
 from torchvision.utils import save_image
 import torch
@@ -100,7 +99,7 @@ class ActiveLearner():
 
         """
         logger.info(f' => Iteration {self.iter} Method {self.strategy_name} - Saving the new labelled images for further visual analysis...')
-        create_class_dir(path=self.path, iter=self.iter, classes=self.dataset.classes)
+        create_class_dir(base_path=self.path, iter=self.iter, classes=self.dataset.classes)
         
         for idx_top, (_, img, gt) in enumerate(Subset(self.dataset.unlab_train_ds, new_labelled_idxs)): # type: ignore
             if self.ct_p["task"] != 'clf': 
@@ -390,8 +389,8 @@ class ActiveLearner():
             strategy_name=self.strategy_name,
             exp_path=self.ct_p["exp_path"],
             dataset_name=self.ct_p["dataset_name"],
-            iter=iter,
-            trial=self.ct_p["trial"]
+            al_iter=iter,
+            cicle_iter=self.ct_p["trial"]
         )
 
         return iter_train_results
@@ -533,7 +532,7 @@ class ActiveLearner():
                     idxs_new_labels=idxs_new_labels, 
                     d_labels=d_labels, 
                     al_iter=self.iter, 
-                    gtg_result_prediction=self.gtg_result_prediction
+                    gtg_result_prediction=self.gtg_result_prediction # type: ignore
                 )
             
             else: self.save_tsne(idxs_new_labels=idxs_new_labels, d_labels=d_labels, al_iter=self.iter)
@@ -559,29 +558,29 @@ class ActiveLearner():
         if al_params["al_iters"] > 1:
             if self.dataset.n_classes <= 10: plot_classes_count_iterations(
                 count_classes=self.count_classes, 
-                classes=self.dataset.classes,
+                class_labels=self.dataset.classes,
                 strategy_name=self.strategy_name, 
                 exp_path=self.ct_p["exp_path"], 
                 dataset_name=self.ct_p["dataset_name"],
-                trial=self.ct_p["trial"]
+                cicle_iter=self.ct_p["trial"]
             )
             plot_entropy_iterations_classes(
                 count_classes=self.count_classes, 
                 strategy_name=self.strategy_name, 
                 exp_path=self.ct_p["exp_path"], 
                 dataset_name=self.ct_p["dataset_name"], 
-                trial=self.ct_p["trial"]
+                cicle_iter=self.ct_p["trial"],
             )
         
         # plotting the cumulative train results
         plot_cumulative_train_results(
-            keys=list(self.t_p["results_dict"]["train"].keys()), 
-            train_results=self.train_results, 
+            list_dict_keys=list(self.t_p["results_dict"]["train"].keys()), 
+            cum_train_results=self.train_results, 
             strategy_name=self.strategy_name, 
-            n_pred_loss=len(self.train_results[1]["train_pred_loss"]),
+            epochs=len(self.train_results[1]["train_pred_loss"]),
             exp_path=self.ct_p["exp_path"], 
             dataset_name=self.ct_p["dataset_name"], 
-            trial=self.ct_p["trial"]
+            cicle_iter=self.ct_p["trial"]
         )
-        
+    
         return results_format["test"]
