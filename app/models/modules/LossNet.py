@@ -96,7 +96,6 @@ class LossNet(nn.Module):
         feature_sizes = LL_params["feature_sizes"]
         num_channels = LL_params["num_channels"]
         interm_dim = LL_params["interm_dim"]
-        task = LL_params["task"]
         
         self.GAP = []
         for feature_size in feature_sizes:

@@ -357,13 +357,13 @@ class Cls_Datasets():
 
         auto_encoder = BackBone_Decoder(classes=self.n_classes, n_channels=self.n_channels, image_size=self.image_size)
         fit_ae(auto_encoder, device, self.train_ds)
-        dl = DataLoader(self.train_ds, shuffle=True, pin_memory=True, batch_size=batch_size)
+        dl = DataLoader(self.train_ds, shuffle=True, pin_memory=(device == torch.device("cuda")), batch_size=batch_size)
         
         self.labelled_indices = get_initial_sample_higher_MSE(auto_encoder, dl, device, al_params["init_lab_obs"]) if strategy == 'mse' \
             else get_initial_sample_farthest_KMeans(auto_encoder, dl, device, al_params["init_lab_obs"], n_obs_per_class)
         
         # the indices are created my araging
-        self.unlabelled_indices = [idx for idx in np.arange(len(self.train_ds)) if idx not in self.labelled_indices]
+        self.unlabelled_indices = [int(idx) for idx in np.arange(len(self.train_ds)) if idx not in self.labelled_indices]
         
         return auto_encoder.encoder.state_dict()
     

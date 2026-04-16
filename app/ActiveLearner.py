@@ -70,7 +70,7 @@ class ActiveLearner():
 
         # save the initial count classes in the csv file
         write_csv(
-            filename = f'{self.ct_p["task"]}_count_classes.csv',
+            filename = '_count_classes.csv',
             exp_path = self.ct_p["exp_path"],
             dataset_name = self.ct_p["dataset_name"],
             head = ['method', 'iter', 'lab_obs'] + self.dataset.classes,
@@ -102,12 +102,7 @@ class ActiveLearner():
         create_class_dir(base_path=self.path, iter=self.iter, classes=self.dataset.classes)
         
         for idx_top, (_, img, gt) in enumerate(Subset(self.dataset.unlab_train_ds, new_labelled_idxs)): # type: ignore
-            if self.ct_p["task"] != 'clf': 
-                unique_labs = np.unique(np.array([labs[-1] for labs in gt]))
-                for lab in unique_labs: 
-                    save_image(img, f'{self.path}/new_labelled_images/{self.iter}/{self.dataset.classes[int(lab)]}/{idx_top}.png')
-            else:
-                save_image(img, f'{self.path}/new_labelled_images/{self.iter}/{self.dataset.classes[gt]}/{idx_top}.png')
+            save_image(img, f'{self.path}/new_labelled_images/{self.iter}/{self.dataset.classes[gt]}/{idx_top}.png')
         logger.info(' DONE\n')
         
         
@@ -117,7 +112,6 @@ class ActiveLearner():
         Get a random sample of unlabelled indices for active learning.
         Selects a random subset of unlabelled indices to be used in the current
         active learning iteration. The selection process depends on the task type.
-        For classification tasks ('clf'):
             - Sets a reproducible seed based on dataset_id, trial number, and
               current iteration to ensure deterministic sampling across trials.
             - Randomly permutes the unlabelled indices and selects the first
@@ -126,8 +120,7 @@ class ActiveLearner():
             - Resets the seed to its original value after sampling.
             - If 'temp_unlab_pool' is True, removes the selected samples from
               the unlabelled indices pool for the current iteration.
-        For non-classification tasks:
-            - Returns all unlabelled indices as the random sample.
+
         
         Returns:
             None: Updates self.rand_unlab_sample with the selected indices
@@ -136,27 +129,24 @@ class ActiveLearner():
         Raises:
             KeyError: If required keys are missing in al_params or ct_p dictionaries.
         """
-        if self.ct_p["task"] == 'clf':
-            # set seed for reproducibility            
-            seed = self.dataset.dataset_id * (self.ct_p["trial"] * al_params["al_iters"] + (self.iter - 1))
-            set_seeds(seed)
-            
-            rand_perm = torch.randperm(len(self.unlabelled_indices)).tolist()
-            # it has the indices of the unlabelled sample
-            self.rand_unlab_sample = [self.unlabelled_indices[idx] for idx in rand_perm[:al_params["unlab_sample_dim"]]]
-            
-            logger.info(f' SEED: {seed} - Last 10 permuted indices are: {rand_perm[-10:]}')
-            
-            #reset the original seed
-            set_seeds()
-            
-            if self.ct_p["temp_unlab_pool"]:
-                # removing the whole observation sample fromt the unlabelled indices list
-                for idx in self.rand_unlab_sample: self.unlabelled_indices.remove(idx) # - 10000
-            
-        else: self.rand_unlab_sample = self.unlabelled_indices
-            
-    
+        # set seed for reproducibility            
+        seed = self.dataset.dataset_id * (self.ct_p["trial"] * al_params["al_iters"] + (self.iter - 1))
+        set_seeds(seed)
+        
+        rand_perm = torch.randperm(len(self.unlabelled_indices)).tolist()
+        # it has the indices of the unlabelled sample
+        self.rand_unlab_sample = [self.unlabelled_indices[idx] for idx in rand_perm[:al_params["unlab_sample_dim"]]]
+        
+        logger.info(f' SEED: {seed} - Last 10 permuted indices are: {rand_perm[-10:]}')
+        
+        #reset the original seed
+        set_seeds()
+        
+        if self.ct_p["temp_unlab_pool"]:
+            # removing the whole observation sample fromt the unlabelled indices list
+            for idx in self.rand_unlab_sample: self.unlabelled_indices.remove(idx) # - 10000
+
+
     def load_best_checkpoint(self):
         """Load the best model checkpoint from disk.
 
@@ -375,7 +365,7 @@ class ActiveLearner():
         
         # save the results in the csv file for further analysis and plotting of cumulative results after the end of all iterations
         write_csv(
-            filename = f'{self.ct_p["task"]}_results.csv',
+            filename = 'results.csv',
             exp_path = self.ct_p["exp_path"],
             dataset_name = self.ct_p["dataset_name"],
             head = ['method', 'iter', 'lab_obs'] + test_res_keys,
@@ -547,7 +537,7 @@ class ActiveLearner():
 
         
             write_csv(
-                filename = f'{self.ct_p["task"]}_count_classes.csv',
+                filename = 'count_classes.csv',
                 exp_path = self.ct_p["exp_path"],
                 dataset_name = self.ct_p["dataset_name"],
                 head = ['method', 'iter', 'lab_obs'] + self.dataset.classes,

@@ -20,7 +20,6 @@ import yaml
 import random
 from matplotlib.typing import ColorType
 from typing import List, Dict, Any, Tuple
-import argparse
 import torch.distributed as dist
 
 
@@ -787,7 +786,7 @@ def plot_new_labelled_tsne(
         TypeError: If input arguments are of incorrect types.
     """
     
-    tsne = TSNE().fit_transform(np.vstack((lab["embedds"].numpy(), unlab["embedds"].numpy())))
+    tsne = TSNE(n_jobs=-1).fit_transform(np.vstack((lab["embedds"].numpy(), unlab["embedds"].numpy())))
     tsne_lab, tsne_unlab = tsne[:len(lab["embedds"]), :], tsne[len(lab["embedds"]):, :]
     
     x_lab, y_lab = tsne_lab[:, 0], tsne_lab[:, 1]

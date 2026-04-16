@@ -105,7 +105,7 @@ def run_strategies(
     n_lab_obs = [al_params["init_lab_obs"] + (iter * al_params["n_top_k_obs"]) for iter in range(al_params["al_iters"])]
      
     # get the strategis object to run them
-    strategies = get_strategies_object(methods, Masters, ct_p, t_p, gtg_p)
+    strategies = get_strategies_object(methods=methods, Masters=Masters, ct_p=ct_p, t_p=t_p, gtg_p=gtg_p)
     
     ##########################################################################################################
     # START THE ACTIVE LEARNING PROECSS
