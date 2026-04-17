@@ -181,7 +181,7 @@ class Cls_TrainWorker():
                 outputs: torch.Tensor, 
                 labels: torch.Tensor, 
                 epoch: int,
-                tidal: None | Tuple[torch.Tensor, torch.Tensor, int] = None
+                tidal: None | Tuple[torch.Tensor, torch.Tensor | None, int] = None
             ) -> Tuple[float, torch.Tensor, float, float]:
             """Compute losses for the model based on the active learning method.
 
@@ -263,7 +263,7 @@ class Cls_TrainWorker():
                 # the predicted module output and a moving average of probabilities.
                 log_assert(tidal != None, 'TiDAL parameters are None')
                 idxs, moving_prob, epoch = tidal # type: ignore
-                moving_prob = moving_prob.to(self.device)
+                moving_prob = moving_prob.to(self.device) # type: ignore
                 moving_prob = (moving_prob * epoch + torch.softmax(outputs, dim=1) * 1) / (epoch + 1)
                 
                 self.train_dl.dataset.moving_prob[idxs.tolist(), :] = moving_prob.detach().cpu() # type: ignore
@@ -309,9 +309,9 @@ class Cls_TrainWorker():
             self, 
             images: torch.Tensor, 
             labels: torch.Tensor,  
-            weight: torch.Tensor, 
+            weight: float, 
             idxs: torch.Tensor, 
-            moving_prob: torch.Tensor, 
+            moving_prob: torch.Tensor | None, 
             epoch: int, 
             train_loss_ce: float, 
             train_loss_pred: float
@@ -411,7 +411,16 @@ class Cls_TrainWorker():
                     images = torch.cat((images_l, images_u), dim=0)
                     labels = torch.cat((labels_l, labels_u), dim=0)
                     
-                    train_a, train_l, train_l_ce, train_l_pred = self.train_batch(images, labels, weight, idxs, None, epoch, train_loss_ce, train_loss_pred)
+                    train_a, train_l, train_l_ce, train_l_pred = self.train_batch(
+                        images=images, 
+                        labels=labels, 
+                        weight=weight, 
+                        idxs=idxs, 
+                        moving_prob=None, 
+                        epoch=epoch, 
+                        train_loss_ce=train_loss_ce, 
+                        train_loss_pred=train_loss_pred
+                    )
                     
                     logger.info(f'{b_idx} | accuracy -> {train_a}\tloss -> {train_l}\ttrain_loss_ce -> {train_l_ce}\ttrain_loss_pred -> {train_l_pred}')
                     
