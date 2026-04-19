@@ -188,7 +188,7 @@ class GTG_off(ActiveLearner):
         seventh_neigh = concat_embedds[torch.argsort(A_matrix, dim=1)[:, 6]]            
             
         sigmas = torch.unsqueeze(torch.tensor([
-            self.get_A_fn[self.AM_function](torch.cat((
+            self.get_A_e_d(torch.cat((
                 torch.unsqueeze(concat_embedds[i], dim=0), torch.unsqueeze(seventh_neigh[i], dim=0)
             )), to_cpu=to_cpu)[0,1].item()
             for i in range(concat_embedds.shape[0]) 
@@ -197,7 +197,7 @@ class GTG_off(ActiveLearner):
         A = torch.exp(-A_matrix.pow(2) / (torch.mm(sigmas.T, sigmas))).to(device)
         A = torch.clamp(A, min=0., max=1.)
         
-        return A.fill_diagonal_(0. if self.AM_self_loop else 1.)
+        return A.fill_diagonal_(1. if self.AM_self_loop else 0.)
     
     
     def get_A_e_d(self, concat_embedds: torch.Tensor, to_cpu = False) -> torch.Tensor:
@@ -222,7 +222,7 @@ class GTG_off(ActiveLearner):
                 is False), or 1 if self-loops are enabled (AM_self_loop is True).
         """
         A = torch.cdist(concat_embedds, concat_embedds).to(torch.device('cpu') if to_cpu else self.device)
-        return torch.clamp(A, min=0., max=1.).fill_diagonal_(0. if self.AM_self_loop else 1.)
+        return torch.clamp(A, min=0., max=1.).fill_diagonal_(1. if self.AM_self_loop else 0.)
 
 
 

@@ -205,7 +205,9 @@ class GTGModule(nn.Module):
             selection method for Gaussian kernels.
         """
         A_matrix = self.get_A_e_d(concat_embedds)
-        seventh_neigh = concat_embedds[torch.argsort(A_matrix, dim=1)[:, 6]]            
+        # Guard small batches: use the farthest available neighbour when < 7 samples.
+        neigh_idx = min(6, max(concat_embedds.shape[0] - 1, 0))
+        seventh_neigh = concat_embedds[torch.argsort(A_matrix, dim=1)[:, neigh_idx]]            
 
         sigmas = torch.unsqueeze(torch.tensor([
             self.get_A_e_d(torch.cat((
@@ -430,6 +432,10 @@ class GTGModule(nn.Module):
             X = X / torch.sum(X, dim=1, keepdim=True)
             if X.requires_grad: X.register_hook(lambda grad: logger.info(f'3- X grad: {grad.sum()}'))
 
+            # Keep labelled observations fixed as hard anchors during propagation.
+            if self.n_lab_obs > 0:
+                X = torch.cat((self.X[:self.n_lab_obs], X[self.n_lab_obs:]), dim=0)
+
             logger.info(f'X: {X[self.n_lab_obs:].argmax(dim=1).unique(return_counts=True)}')
             
             entropy_hist[self.n_lab_obs:, i] = entropy(X[self.n_lab_obs:, :]).to(self.device)
@@ -446,7 +452,12 @@ class GTGModule(nn.Module):
             ), dim=-1)
             
         logger.info(f'end X: {X[self.n_lab_obs:].argmax(dim=1).unique(return_counts=True)}')
-        logger.info(f'GTG accuracy: {X[self.n_lab_obs:].argmax(dim=1).eq(labels[self.n_lab_obs:]).sum().item() / (self.batch_size - self.n_lab_obs)}')
+        unlab_obs = self.batch_size - self.n_lab_obs
+        if unlab_obs > 0:
+            gtg_acc = X[self.n_lab_obs:].argmax(dim=1).eq(labels[self.n_lab_obs:]).sum().item() / unlab_obs
+            logger.info(f'GTG accuracy: {gtg_acc}')
+        else:
+            logger.info('GTG accuracy: N/A (no unlabelled observations in this batch)')
 
         return Xs, entropy_hist
     
@@ -494,6 +505,7 @@ class GTGModule(nn.Module):
             outs: torch.Tensor, 
             labels: torch.Tensor, 
             iteration: int,  
+            n_lab_obs: int | None = None,
             weight: int = 1
         ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], torch.Tensor | None]: 
         """
@@ -525,14 +537,24 @@ class GTGModule(nn.Module):
         """
         
         self.batch_size = len(embedds)
+
+        if n_lab_obs is not None:
+            self.n_lab_obs = min(max(n_lab_obs, 0), self.batch_size)
+        else:
+            # Fallback when explicit labelled count is not provided by the caller.
+            expected_n_lab_obs = self.batch_size_gtg_online * iteration
+            self.n_lab_obs = min(max(expected_n_lab_obs, 0), self.batch_size)
+        
+        '''self.batch_size = len(embedds)
         #int(self.batch_size * self.perc_labelled_batch)
         #                          10               *            32              +          32                * iteration
         if self.batch_size == al_params["al_iters"] * self.batch_size_gtg_online + self.batch_size_gtg_online * iteration:
             self.n_lab_obs = self.batch_size_gtg_online * iteration 
         else:
             #                   batch_size   - (           10000              % (          10          *    batch_size_gtg_online  )) 
-            self.n_lab_obs = self.batch_size - (al_params["unlab_sample_dim"] % (al_params["al_iters"] * self.batch_size_gtg_online)) 
+            self.n_lab_obs = self.batch_size - (al_params["unlab_sample_dim"] % (al_params["al_iters"] * self.batch_size_gtg_online)) '''
         
+
         self.lab_labels = labels[:self.n_lab_obs]
         self.get_X(F.softmax(outs, dim=1))
         

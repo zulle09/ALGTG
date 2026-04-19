@@ -233,7 +233,10 @@ class Cls_TrainWorker():
                 if self.net_type != 'lstmbc': entr_loss = weight * self.mse_loss_fn(pred_entr, true_entr.detach())
                 else: entr_loss = weight * self.bce_loss_fn(pred_entr, true_entr.detach())
 
-                lab_ce_loss = torch.mean(ce_loss[labelled_mask])
+                if torch.any(labelled_mask):
+                    lab_ce_loss = torch.mean(ce_loss[labelled_mask])
+                else:
+                    lab_ce_loss = torch.zeros((), device=self.device)
                 
                 ############################################################################################################################
                 # NO LOSS SCALING SINCE I HAVE REMOVED THE OVERSAMPLING STEP
@@ -242,7 +245,9 @@ class Cls_TrainWorker():
                 # es: ma1000 labelled samples, 10000 unlabelled samples 128 batch_size -> scaling factor = (10000/128) / (1000/128) = 9.875
                 ############################################################################################################################
                 
-                entr_loss = torch.mean(entr_loss[labelled_mask]) + torch.mean(entr_loss[~labelled_mask])
+                entr_loss_lab = torch.mean(entr_loss[labelled_mask]) if torch.any(labelled_mask) else torch.zeros((), device=self.device)
+                entr_loss_unlab = torch.mean(entr_loss[~labelled_mask]) if torch.any(~labelled_mask) else torch.zeros((), device=self.device)
+                entr_loss = entr_loss_lab + entr_loss_unlab
                 
                 loss = lab_ce_loss + entr_loss
                 
@@ -312,6 +317,7 @@ class Cls_TrainWorker():
             weight: float, 
             idxs: torch.Tensor, 
             moving_prob: torch.Tensor | None, 
+            n_lab_obs: int | None,
             epoch: int, 
             train_loss_ce: float, 
             train_loss_pred: float
@@ -343,7 +349,7 @@ class Cls_TrainWorker():
         for optimizer in self.optimizers: optimizer.zero_grad(set_to_none=True)
                     
         outputs, module_out = self.model(images, weight=weight, labels=labels) if not self.is_gtg_module \
-            else self.model(images, weight=weight, labels=labels, iteration=self.iter)
+            else self.model(images, weight=weight, labels=labels, iteration=self.iter, n_lab_obs=n_lab_obs)
                                                                         
         score, loss, train_loss_ce, train_loss_pred = self.compute_losses(
             weight=weight, module_out=module_out, outputs=outputs, labels=labels,
@@ -417,6 +423,7 @@ class Cls_TrainWorker():
                         weight=weight, 
                         idxs=idxs, 
                         moving_prob=None, 
+                        n_lab_obs=images_l.shape[0],
                         epoch=epoch, 
                         train_loss_ce=train_loss_ce, 
                         train_loss_pred=train_loss_pred
@@ -432,7 +439,7 @@ class Cls_TrainWorker():
             else:
                 for idxs, images, labels, moving_prob in self.train_dl:
                     
-                    train_a, train_l, train_l_ce, train_l_pred = self.train_batch(images, labels, weight, idxs, moving_prob, epoch, train_loss_ce, train_loss_pred)
+                    train_a, train_l, train_l_ce, train_l_pred = self.train_batch(images, labels, weight, idxs, moving_prob, None, epoch, train_loss_ce, train_loss_pred)
                     
                     train_accuracy += train_a
                     train_loss += train_l

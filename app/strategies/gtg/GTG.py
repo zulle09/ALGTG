@@ -66,13 +66,11 @@ class GTG(ActiveLearner):
                 predicted and true top-k, and MSE losses.
         """
             
-        lab_query_bs = self.batch_size_gtg_online * self.iter
-        
         # I need to create two dataloaders, one for the labelled data and one for the unlabelled data, 
         # since I need to pass them separately to the GTG module to get the predicted entropies and true entropies
         lab_train_dl = DataLoader(
             dataset=Subset(self.dataset.unlab_train_ds, self.labelled_indices), 
-            batch_size=lab_query_bs, shuffle=False, pin_memory=True
+            batch_size=self.batch_size_gtg_online * self.iter, shuffle=False, pin_memory=True
         )
             
         unlab_train_dl = DataLoader(
@@ -82,6 +80,12 @@ class GTG(ActiveLearner):
             
         pred = torch.empty(0, dtype=torch.float32, device=self.device)
         true = torch.empty(0, dtype=torch.float32, device=self.device)
+
+        if len(lab_train_dl) != len(unlab_train_dl):
+            logger.warning(
+                f'GTG query dataloaders have different lengths: lab={len(lab_train_dl)} unlab={len(unlab_train_dl)}. '
+                'zip() will stop at the shortest length.'
+            )
             
         logger.info(' => Running GTG in inference mode...')
             
@@ -108,12 +112,14 @@ class GTG(ActiveLearner):
                     embedds=torch.cat((lab_embedds, unlab_embedds), dim=0), 
                     outs=torch.cat((lab_outs, unlab_outs), dim=0),
                     labels=torch.cat((lab_labels, unlab_labels), dim=0).to(self.device),
-                    iteration=self.iter
+                    iteration=self.iter,
+                    n_lab_obs=lab_images.shape[0]
                 )
                     
                 # save only the unalbelled entropies
-                pred = torch.cat((pred, y_pred[lab_query_bs:]), dim=0) 
-                true = torch.cat((true, y_true[lab_query_bs:]), dim=0)
+                n_curr_lab = lab_images.shape[0]
+                pred = torch.cat((pred, y_pred[n_curr_lab:]), dim=0)
+                true = torch.cat((true, y_true[n_curr_lab:]), dim=0)
                     
         logger.info(' DONE\n')
             

@@ -357,9 +357,7 @@ class Cls_Datasets():
 
         auto_encoder = BackBone_Decoder(classes=self.n_classes, n_channels=self.n_channels, image_size=self.image_size)
         fit_ae(model=auto_encoder, device=device, train_ds=self.train_ds)
-        logger.info(device)
-        logger.info(torch.device("cuda"))
-        dl = DataLoader(self.train_ds, shuffle=True, pin_memory=(device != "mps"), batch_size=batch_size)
+        dl = DataLoader(self.train_ds, shuffle=True, pin_memory=(device == torch.device("cuda")), batch_size=batch_size)
         
         self.labelled_indices = get_initial_sample_higher_MSE(auto_encoder, dl, device, al_params["init_lab_obs"]) if strategy == 'mse' \
             else get_initial_sample_farthest_KMeans(auto_encoder, dl, device, al_params["init_lab_obs"], n_obs_per_class)

@@ -51,7 +51,7 @@ class Master_Model(nn.Module):
         
         
 
-    def forward(self, x, labels=None, weight=1, mode='all', iteration=None):
+    def forward(self, x, labels=None, weight=1, mode='all', iteration=None, n_lab_obs=None):
         """
         Performs forward pass through the model.
         
@@ -69,6 +69,7 @@ class Master_Model(nn.Module):
                 Defaults to 'all'.
             iteration (int, optional): Current iteration number for GTGModule.
                 Defaults to None.
+            n_lab_obs (int, optional): Number of labeled observations in the batch for GTGModule. Defaults to None.
         
         Returns:
             tuple or torch.Tensor: Varies depending on mode:
@@ -98,7 +99,15 @@ class Master_Model(nn.Module):
                     features = self.backbone.get_features()
                     if weight == 0: features = [feature.detach() for feature in features]                        
                     if self.only_module_name == 'GTGModule':
-                        module_out = self.added_module(features=features, embedds=embedds, outs=outs, labels=labels, weight=weight, iteration=iteration)
+                        module_out = self.added_module(
+                            features=features,
+                            embedds=embedds,
+                            outs=outs,
+                            labels=labels,
+                            weight=weight,
+                            iteration=iteration,
+                            n_lab_obs=n_lab_obs
+                        )
                     else: module_out = self.added_module(features=features)
                     return outs, module_out
                 else: return outs, None
