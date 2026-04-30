@@ -90,4 +90,3 @@ dependencies:
       - torch==2.11.0
       - torchvision==0.26.0
       - typing-extensions==4.15.0
-prefix: /opt/miniconda3/envs/algtg
