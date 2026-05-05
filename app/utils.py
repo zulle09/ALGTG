@@ -591,7 +591,7 @@ def plot_res_std_mean(
     Raises:
         FileNotFoundError: If the results CSV file does not exist at the expected path.
     """
-    df = pd.read_csv(f'results/{exp_path}/{dataset_name}/clf_results.csv')
+    df = pd.read_csv(f'results/{exp_path}/{dataset_name}/results.csv')
 
     df_grouped = (
         df[['method', 'lab_obs', 'test_accuracy']

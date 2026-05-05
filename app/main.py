@@ -142,7 +142,7 @@ def main() -> None:
     logging.basicConfig(filename = f'results/{exp_path}/exp_log.log',
                     filemode = 'a',
                     format = '%(asctime)s - %(levelname)s: %(message)s',
-                    datefmt = '%H:%M:%S',
+                    datefmt = '%d-%m-%y - %H:%M:%S',
                     level = logging.INFO)
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
