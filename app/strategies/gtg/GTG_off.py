@@ -188,7 +188,8 @@ class GTG_off(ActiveLearner):
         # Use a raw distance matrix (diagonal=0) for neighbour search so the self-distance
         # is always at sorted index 0 regardless of the AM_self_loop setting.
         raw_dist = torch.clamp(torch.cdist(concat_embedds, concat_embedds), min=0., max=1.).to(device)
-        seventh_neigh = concat_embedds[torch.argsort(raw_dist, dim=1)[:, 7]]
+        neigh_idx = min(7, max(concat_embedds.shape[0] - 1, 0))
+        seventh_neigh = concat_embedds[torch.argsort(raw_dist, dim=1)[:, neigh_idx]]
             
         sigmas = torch.unsqueeze(torch.tensor([
             self.get_A_e_d(torch.cat((
@@ -359,7 +360,7 @@ class GTG_off(ActiveLearner):
             X_old = torch.clone(self.X)
 
             self.X *= torch.mm(self.A, self.X)
-            self.X /= torch.sum(self.X, dim=1, keepdim=True)
+            self.X /= torch.sum(self.X, dim=1, keepdim=True).clamp(min=1e-8)
 
             # Keep labelled observations fixed as hard anchors during propagation.
             if n_lab_obs > 0:

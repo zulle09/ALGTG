@@ -435,7 +435,7 @@ class GTGModule(nn.Module):
 
             X = X * torch.mm(A, X)
             if X.requires_grad: X.register_hook(lambda grad: logger.info(f'2- X grad: {grad.sum()}'))
-            X = X / torch.sum(X, dim=1, keepdim=True)
+            X = X / torch.sum(X, dim=1, keepdim=True).clamp(min=1e-8)
             if X.requires_grad: X.register_hook(lambda grad: logger.info(f'3- X grad: {grad.sum()}'))
 
             # Keep labelled observations fixed as hard anchors during propagation.

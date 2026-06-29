@@ -311,16 +311,14 @@ class Cls_TrainWorker():
     
     
     def train_batch(
-            self, 
-            images: torch.Tensor, 
-            labels: torch.Tensor,  
-            weight: float, 
-            idxs: torch.Tensor, 
-            moving_prob: torch.Tensor | None, 
+            self,
+            images: torch.Tensor,
+            labels: torch.Tensor,
+            weight: float,
+            idxs: torch.Tensor,
+            moving_prob: torch.Tensor | None,
             n_lab_obs: int | None,
-            epoch: int, 
-            train_loss_ce: float, 
-            train_loss_pred: float
+            epoch: int
         ) -> Tuple[float, float, float, float]:
         """
         Trains the model on a single batch of data.
@@ -334,8 +332,6 @@ class Cls_TrainWorker():
             idxs: Indices of the samples in the current batch (used for TiDAL).
             moving_prob: Moving average probabilities for TiDAL method.
             epoch: Current training epoch number.
-            train_loss_ce: Cumulative cross-entropy loss up to the current batch (for logging).
-            train_loss_pred: Cumulative module prediction loss up to the current batch (for logging).
         
         Returns:
             Tuple[float, float, float, float]: A tuple containing:
@@ -418,15 +414,13 @@ class Cls_TrainWorker():
                     labels = torch.cat((labels_l, labels_u), dim=0)
                     
                     train_a, train_l, train_l_ce, train_l_pred = self.train_batch(
-                        images=images, 
-                        labels=labels, 
-                        weight=weight, 
-                        idxs=idxs, 
-                        moving_prob=None, 
+                        images=images,
+                        labels=labels,
+                        weight=weight,
+                        idxs=idxs,
+                        moving_prob=None,
                         n_lab_obs=images_l.shape[0],
-                        epoch=epoch, 
-                        train_loss_ce=train_loss_ce, 
-                        train_loss_pred=train_loss_pred
+                        epoch=epoch
                     )
                     
                     logger.info(f'{b_idx} | accuracy -> {train_a}\tloss -> {train_l}\ttrain_loss_ce -> {train_l_ce}\ttrain_loss_pred -> {train_l_pred}')
@@ -439,7 +433,7 @@ class Cls_TrainWorker():
             else:
                 for idxs, images, labels, moving_prob in self.train_dl:
                     
-                    train_a, train_l, train_l_ce, train_l_pred = self.train_batch(images, labels, weight, idxs, moving_prob, None, epoch, train_loss_ce, train_loss_pred)
+                    train_a, train_l, train_l_ce, train_l_pred = self.train_batch(images, labels, weight, idxs, moving_prob, None, epoch)
                     
                     train_accuracy += train_a
                     train_loss += train_l
@@ -481,8 +475,8 @@ class Cls_TrainWorker():
         
         self.__load_checkpoint(self.check_best_path)
         test_accuracy = .0
-        
-        self.model.backbone.eval() # type: ignore
+
+        self.model.eval() # type: ignore
 
         with torch.inference_mode():
             for _, images, labels in self.test_dl:
