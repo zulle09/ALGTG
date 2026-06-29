@@ -205,9 +205,12 @@ class GTGModule(nn.Module):
             selection method for Gaussian kernels.
         """
         A_matrix = self.get_A_e_d(concat_embedds)
-        # Guard small batches: use the farthest available neighbour when < 7 samples.
-        neigh_idx = min(6, max(concat_embedds.shape[0] - 1, 0))
-        seventh_neigh = concat_embedds[torch.argsort(A_matrix, dim=1)[:, neigh_idx]]            
+        # Use a raw distance matrix (diagonal=0) for neighbour search so the self-distance
+        # is always at sorted index 0 regardless of the AM_self_loop setting.
+        raw_dist = torch.clamp(torch.cdist(concat_embedds, concat_embedds), min=0., max=1.)
+        # Guard small batches: use the farthest available neighbour when < 8 samples.
+        neigh_idx = min(7, max(concat_embedds.shape[0] - 1, 0))
+        seventh_neigh = concat_embedds[torch.argsort(raw_dist, dim=1)[:, neigh_idx]]
 
         sigmas = torch.unsqueeze(torch.tensor([
             self.get_A_e_d(torch.cat((
@@ -401,32 +404,35 @@ class GTGModule(nn.Module):
         logger.info(f'Non zero cell in features_embedding {torch.count_nonzero(features_embedding)} / {features_embedding.numel()}')
         if torch.any(torch.isnan(features_embedding)):  logger.info(f'NaN cell in features_embedding  {torch.isnan(features_embedding).sum()} / {features_embedding.numel()}')
                         
-        entropy_hist = torch.zeros((self.batch_size, self.gtg_max_iter), device=self.device)        
-        
         A = self.get_A(features_embedding) # -> nxn
-        
+
         logger.info(f'Non zero cell in A {torch.count_nonzero(A)} / {A.numel()}')
         if torch.any(torch.isnan(A)): logger.info(f'NaN cell in A {torch.isnan(A).sum()} / {A.numel()}')
-        
+
         if(torch.isnan(A).sum()):
             nan_indices = torch.isnan(A).nonzero(as_tuple=True)
             for i, j in zip(nan_indices[0], nan_indices[1]):
                 logger.info(f'NaN cell in A: {i} {j} {A[i, j]}')
-        
+
         X = self.X.clone()
         if A.requires_grad: X.requires_grad_(True)
-        Xs = torch.empty((self.batch_size, self.n_classes, 0), device=self.device, dtype=torch.float32, requires_grad=True if A.requires_grad else False)        
-        
+        Xs = torch.empty((self.batch_size, self.n_classes, 0), device=self.device, dtype=torch.float32, requires_grad=True if A.requires_grad else False)
+
+        # Accumulate unlabeled entropy per-iteration into a list so that torch.stack
+        # preserves the autograd graph (in-place assignment into a pre-allocated tensor
+        # would silently break gradients from the adjacency matrix to mod_ls).
+        unlab_ent_list = []
+
         err = float('Inf')
         i = 0
-        
-                             
+
+
         while err > self.gtg_tol and i < self.gtg_max_iter:
-            
+
             if X.requires_grad: X.register_hook(lambda grad: logger.info(f'1- X grad: {grad.sum()}\n'))
-            
+
             X_old = X.detach().clone()
-                        
+
             X = X * torch.mm(A, X)
             if X.requires_grad: X.register_hook(lambda grad: logger.info(f'2- X grad: {grad.sum()}'))
             X = X / torch.sum(X, dim=1, keepdim=True)
@@ -437,16 +443,30 @@ class GTGModule(nn.Module):
                 X = torch.cat((self.X[:self.n_lab_obs], X[self.n_lab_obs:]), dim=0)
 
             logger.info(f'X: {X[self.n_lab_obs:].argmax(dim=1).unique(return_counts=True)}')
-            
-            entropy_hist[self.n_lab_obs:, i] = entropy(X[self.n_lab_obs:, :]).to(self.device)
+
+            unlab_ent_list.append(entropy(X[self.n_lab_obs:, :]).to(self.device))
 
             err = torch.norm(X.detach() - X_old)
             Xs = torch.cat((Xs, X.unsqueeze(dim=-1)), dim=-1)
-            
+
             i += 1
-        
-        # fill in case we early extit by the norm err
-        for _ in range(self.gtg_max_iter - Xs.shape[-1]): 
+
+        # Build entropy_hist as a differentiable tensor by stacking the per-iteration
+        # unlabeled entropies, then padding remaining iterations with zeros.
+        n_unlab = self.batch_size - self.n_lab_obs
+        actual_iters = len(unlab_ent_list)
+        if actual_iters > 0:
+            unlab_hist = torch.stack(unlab_ent_list, dim=1)  # (n_unlab, actual_iters)
+            if actual_iters < self.gtg_max_iter:
+                pad = torch.zeros(n_unlab, self.gtg_max_iter - actual_iters, device=self.device)
+                unlab_hist = torch.cat([unlab_hist, pad], dim=1)
+        else:
+            unlab_hist = torch.zeros(n_unlab, self.gtg_max_iter, device=self.device)
+        lab_zeros = torch.zeros(self.n_lab_obs, self.gtg_max_iter, device=self.device)
+        entropy_hist = torch.cat([lab_zeros, unlab_hist], dim=0)  # (B, gtg_max_iter)
+
+        # fill in case we early exit by the norm err
+        for _ in range(self.gtg_max_iter - Xs.shape[-1]):
             Xs = torch.cat((
                 Xs, torch.zeros((self.batch_size, self.n_classes, 1), device=self.device, dtype=torch.float32, requires_grad=True if A.requires_grad else False)
             ), dim=-1)

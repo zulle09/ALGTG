@@ -106,7 +106,7 @@ def train_ddp(rank: int, world_size: int, params: Dict[str, Any], conn: connecti
     test_results = [torch.zeros(1, device=torch.device(rank)) for _ in range(world_size)]
     
     
-    lab_train_ds = Subset(ct_p["Dataset"].lab_train_ds, params["labelled_subset"])
+    lab_train_ds = Subset(ct_p["Dataset"].train_ds, params["labelled_indices"])
     params["train_dl"] = DataLoader(
         lab_train_ds,
         #sampler=DistributedSampler(params["labelled_subset"], num_replicas=world_size,

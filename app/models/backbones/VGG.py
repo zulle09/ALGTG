@@ -43,11 +43,13 @@ class VGG(nn.Module):
         y = x
         for i, model in enumerate(self.features):
             y = model(y)
-            if i in {3,5,10,15}: feat.append(y) #(y.view(y.size(0),-1))
+            if i in {5, 12, 22, 32}: feat.append(y)
         self.feat = feat
-        
-        x = self.features(x)
-        x = self.avgpool(x)
+
+        # y is already the output of the full features sequential — no second pass.
+        # A second self.features(x) call would duplicate the computation graph and
+        # accumulate gradients twice on every backbone weight during backward().
+        x = self.avgpool(y)
         
         x = x.view(x.size(0), -1)
         embedds = self.linears(x)
@@ -62,7 +64,7 @@ class VGG(nn.Module):
         return self.feat
     
     def get_rich_features_shape(self) -> List[int]:
-        return [64, 64, 128, 256]
+        return [64, 128, 256, 512]
 
 
 

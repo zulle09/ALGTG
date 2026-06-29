@@ -69,10 +69,10 @@ def get_ll_module_params(image_size: int, dataset_name: str) -> Dict[str, int | 
                 num_channels=[64, 128, 256, 512],
                 interm_dim=128, task='cls'
             )
-    else: 
+    else:
         return dict(
-                feature_sizes=[224, 224, 112, 56],
-                num_channels=[64, 64, 128, 256],
+                feature_sizes=[224, 112, 56, 28],
+                num_channels=[64, 128, 256, 512],
                 interm_dim=128, task='cls'
             )
             

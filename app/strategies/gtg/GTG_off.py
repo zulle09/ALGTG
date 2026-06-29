@@ -185,7 +185,10 @@ class GTG_off(ActiveLearner):
         
         device = torch.device('cpu') if to_cpu else self.device
         A_matrix = self.get_A_e_d(concat_embedds, to_cpu)
-        seventh_neigh = concat_embedds[torch.argsort(A_matrix, dim=1)[:, 6]]            
+        # Use a raw distance matrix (diagonal=0) for neighbour search so the self-distance
+        # is always at sorted index 0 regardless of the AM_self_loop setting.
+        raw_dist = torch.clamp(torch.cdist(concat_embedds, concat_embedds), min=0., max=1.).to(device)
+        seventh_neigh = concat_embedds[torch.argsort(raw_dist, dim=1)[:, 7]]
             
         sigmas = torch.unsqueeze(torch.tensor([
             self.get_A_e_d(torch.cat((
@@ -342,25 +345,30 @@ class GTG_off(ActiveLearner):
         
         self.get_A()
         self.get_X()
-                
+
         n_lab_obs = len(self.lab_embedds_dict["embedds"])
-                        
+        lab_X_init = self.X[:n_lab_obs].clone()
+
         err = float('Inf')
         i = 0
-        
+
         logger.info(' => Running GTG')
         logger.info(f'starting X: {self.X.argmax(dim=1)}')
-        
+
         while err > self.gtg_tol and i < self.gtg_max_iter:
             X_old = torch.clone(self.X)
-            
+
             self.X *= torch.mm(self.A, self.X)
             self.X /= torch.sum(self.X, dim=1, keepdim=True)
-            
+
+            # Keep labelled observations fixed as hard anchors during propagation.
+            if n_lab_obs > 0:
+                self.X[:n_lab_obs] = lab_X_init
+
             logger.info(f'X: {self.X[len(self.labelled_indices):].argmax(dim=1).unique(return_counts=True)}')
-        
+
             self.unlab_entropy_hist[:, i] = entropy(self.X)[len(self.labelled_indices):]
-                        
+
             err = torch.norm(self.X - X_old)
             i += 1
             

@@ -58,15 +58,17 @@ class Module_LSs_GTG_MLP_alternative(nn.Module):
         self.linear = nn.Linear(4, 1)
         self.gtg_func = gtg_func
 
-        
+
     def forward(self, features: List[torch.Tensor], weight: int, labels: torch.Tensor) -> torch.Tensor:
         outs = []
         for id, features_embedding in enumerate(features):
             emb_ls = self.mod_ls(features_embedding, id)
             if weight == 0: emb_ls = emb_ls.detach()
-            latent_feature = self.gtg_func(emb_ls, labels)[0]
-            out1 = latent_feature.view(latent_feature.size(0), -1)
-            out2 = torch.mean(out1, dim=1)
+            # Use entropy_hist mean instead of mean(Xs). Xs mean is the same constant
+            # for every sample (each row of Xs is a probability dist summing to 1).
+            # entropy_hist varies per sample and preserves gradients to mod_ls.
+            entropy_hist = self.gtg_func(emb_ls, labels)[1]  # (B, gtg_max_iter)
+            out2 = torch.mean(entropy_hist, dim=1)  # (B,)
             outs.append(out2.unsqueeze(1))
         outs = torch.cat(outs, dim=1)
         out = self.linear(outs)
@@ -80,17 +82,18 @@ class Module_LSs_GTG_MLP(nn.Module):
         self.mod_ls = Module_LS(params)
         self.gtg_func = gtg_func
 
-        
+
     def forward(self, features: List[torch.Tensor], weight: int, labels: torch.Tensor) -> torch.Tensor:
         ls_features = self.mod_ls(features)
         if weight == 0: ls_features = [ls.detach() for ls in ls_features]
         ls_features = torch.cat(ls_features, dim=1)
-        
-        latent_feature = self.gtg_func(ls_features, labels)[0]
-        out = latent_feature.view(latent_feature.size(0), -1)
-        out = torch.mean(out, dim=1)
-        
-        return out
+
+        # Use entropy_hist (index 1) instead of Xs (index 0). Mean of Xs would produce
+        # the same constant for every sample in the batch (each row of a probability
+        # distribution sums to 1, so mean = actual_iters / (n_classes * gtg_max_iter)).
+        # entropy_hist actually varies per sample and preserves gradients to mod_ls.
+        entropy_hist = self.gtg_func(ls_features, labels)[1]  # (B, gtg_max_iter)
+        return torch.mean(entropy_hist, dim=1)  # (B,)
 
 
 class Module_LS(nn.Module):
