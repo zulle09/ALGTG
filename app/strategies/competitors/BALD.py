@@ -58,24 +58,35 @@ class BALD(ActiveLearner):
         
         self.load_best_checkpoint()
 
-        self.model.backbone.train()
-        
-        prob_dist_drop = torch.zeros((n_drop, len(self.unlab_train_dl.dataset), self.dataset.n_classes), dtype=torch.float32, device=self.device)  # type: ignore
-        indices = torch.empty(0, device=self.device) 
-        
-        for drop in range(n_drop):
-            with torch.inference_mode(): # Allow inference mode
-                for idx_dl, (idxs, images, _) in enumerate(self.unlab_train_dl):
-                    
-                    idxs, images = idxs.to(self.device), images.to(self.device)
-                    
-                    outputs, _ = self.model.backbone(images)
-                                                         
-                    prob_dist_drop[drop][idx_dl * idxs.shape[0] : (idx_dl + 1) * idxs.shape[0]] += F.softmax(outputs, dim=1)
+        # ResNet18 has no dropout layer, so the previous `backbone.train()` yielded identical
+        # forward passes (BatchNorm in train mode is deterministic for a fixed batch) and hence
+        # zero disagreement. Instead keep the backbone in eval mode (BatchNorm uses running stats)
+        # and apply explicit last-layer MC-dropout on the penultimate embeddings — this is what
+        # actually makes the n_drop passes differ.
+        self.model.eval()
+        head = self.model.backbone.linear if hasattr(self.model.backbone, 'linear') else self.model.backbone.classifier
 
-                    if(drop == 0): indices = torch.cat((indices, idxs), dim = 0)
-                    
-        return indices, prob_dist_drop 
+        prob_dist_drop = torch.zeros((n_drop, len(self.unlab_train_dl.dataset), self.dataset.n_classes), dtype=torch.float32, device=self.device)  # type: ignore
+        indices = torch.empty(0, device=self.device)
+
+        with torch.no_grad():
+            for drop in range(n_drop):
+                offset = 0  # running position so an uneven last batch is placed correctly
+                for idxs, images, _ in self.unlab_train_dl:
+
+                    idxs, images = idxs.to(self.device), images.to(self.device)
+                    bs = idxs.shape[0]
+
+                    _, embedds = self.model.backbone(images)
+                    embedds = F.dropout(embedds, p=0.5, training=True)  # MC-dropout
+                    outputs = head(embedds)
+
+                    prob_dist_drop[drop][offset : offset + bs] += F.softmax(outputs, dim=1)
+
+                    if drop == 0: indices = torch.cat((indices, idxs), dim=0)
+                    offset += bs
+
+        return indices, prob_dist_drop
         
     
 
@@ -104,13 +115,16 @@ class BALD(ActiveLearner):
         
         mean_pb = torch.mean(prob_dist_drop, dim=0)
         
-        entropy1 = entropy(mean_pb)
-        entropy2 = torch.mean(entropy(prob_dist_drop, dim=2), dim=0)
-        
+        entropy1 = entropy(mean_pb)                                    # H(E[p])  -> total uncertainty
+        entropy2 = torch.mean(entropy(prob_dist_drop, dim=2), dim=0)   # E[H(p)]  -> aleatoric
+
         del prob_dist_drop
         torch.cuda.empty_cache()
-        
-        return indices, entropy2 - entropy1
+
+        # BALD = mutual information = H(E[p]) - E[H(p)]; higher = more epistemic disagreement.
+        # (Previously returned entropy2 - entropy1, i.e. -BALD, which ranks the least informative
+        # points first — harmless only because the old code produced zero disagreement.)
+        return indices, entropy1 - entropy2
         
     
     

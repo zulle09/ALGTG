@@ -1,8 +1,9 @@
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 from torch.distributions import Categorical
-import pdb
+import random
 
 from ActiveLearner import ActiveLearner
 
@@ -54,7 +55,15 @@ class BADGE(ActiveLearner):
                     if D2[i] > newD[i]:
                         centInds[i] = cent
                         D2[i] = newD[i]
-            if torch.sum(D2) == 0.0: pdb.set_trace()
+            if torch.sum(D2) == 0.0:
+                # Degenerate case (all remaining points coincide with a centre): the
+                # k-means++ sampling distribution is undefined. Fill the rest with random
+                # unpicked points instead of dropping into a debugger, which would hang a
+                # headless/cluster run indefinitely.
+                remaining = [j for j in range(len(self.embedds_dict["embedds"])) if j not in set(indsAll)]
+                random.shuffle(remaining)
+                indsAll.extend(remaining[:n_top_k_obs - len(indsAll)])
+                break
             Ddist = (D2 ** 2) / torch.sum(D2 ** 2)
             customDist = Categorical(Ddist)
             ind = customDist.sample()
@@ -97,14 +106,26 @@ class BADGE(ActiveLearner):
             shuffle=False, pin_memory=True
         )
             
-        logger.info(' => Getting the unlabelled embeddings')
-        self.embedds_dict = { 'embedds': torch.empty((0, self.model.backbone.get_embedding_dim()), dtype=torch.float32, device=self.device) }
-        
+        logger.info(' => Getting the unlabelled embeddings and logits')
+        self.embedds_dict = {
+            'embedds': torch.empty((0, self.model.backbone.get_embedding_dim()), dtype=torch.float32, device=self.device),
+            'outs': torch.empty((0, self.dataset.n_classes), dtype=torch.float32, device=torch.device('cpu'))
+        }
+
         self.load_best_checkpoint()
-        
+
         self.get_embeddings(unlab_train_dl, self.embedds_dict)
         logger.info(' DONE\n')
-                        
+
+        # Build BADGE gradient embeddings: g_x = (p - onehot(argmax p)) (x) z, flattened to (N, C*D).
+        # The magnitude encodes uncertainty and the direction encodes diversity, which is what makes
+        # this BADGE rather than plain k-means++ on penultimate features. Kept on CPU because C*D can
+        # be large (e.g. 200*512 for tiny-imagenet).
+        embs = self.embedds_dict["embedds"].cpu()                                          # (N, D)
+        probs = F.softmax(self.embedds_dict["outs"], dim=1)                                 # (N, C)
+        scale = probs - F.one_hot(probs.argmax(dim=1), num_classes=probs.size(1)).float()  # (N, C)
+        self.embedds_dict["embedds"] = (scale.unsqueeze(2) * embs.unsqueeze(1)).view(embs.size(0), -1)  # (N, C*D)
+
         logger.info(' => Top K extraction using init_centers')
         topk_idx_obs = self.init_centers(n_top_k_obs)
         logger.info(' DONE\n')

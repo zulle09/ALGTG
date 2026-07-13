@@ -78,6 +78,14 @@ class Cls_TrainWorker():
                         
             self.lab_train_dl = DataLoader(dataset=lab_subset, batch_size=self.batch_size_gtg_online * self.iter, shuffle=True, pin_memory=True)
 
+            # train() zips these two loaders; if they yield a different number of batches,
+            # zip() silently truncates and both n_lab_obs and the per-epoch averaging break.
+            assert len(self.lab_train_dl) == len(self.unlab_train_dl), (
+                f'GTG online loaders are misaligned: lab={len(self.lab_train_dl)} '
+                f'unlab={len(self.unlab_train_dl)}. Check init_lab_obs / n_top_k_obs / '
+                f'unlab_sample_dim / bsgtgo in config.'
+            )
+
             self.n_batches = len(self.lab_train_dl)
             
         else: self.n_batches = len(self.train_dl)

@@ -101,7 +101,11 @@ class AlphaMix(ActiveLearner):
             tmp_pred_change, tmp_min_alphas = \
                 self.find_candidate_set(
                     lb_embedding, ulb_embedding, pred_1, alpha_cap=alpha_cap,
-                    Y=self.labelled_indices,
+                    # Must be the labelled *labels* (as a device tensor), not the dataset
+                    # indices: `lb_embedding[Y == i]` needs an element-wise boolean mask.
+                    # Passing the index list made `Y == i` always False, so every class fell
+                    # back to the global labelled mean and per-class anchoring was disabled.
+                    Y=self.lab_embedds_dict["labels"].to(self.device),
                     grads=grads)
 
             is_changed = min_alphas.norm(dim=1) >= tmp_min_alphas.norm(dim=1)
