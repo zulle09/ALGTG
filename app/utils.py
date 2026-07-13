@@ -479,7 +479,7 @@ def plot_gtg_entropy_tensor(
         dir: str
     ) -> None:
     """
-    Plot entropy tensor for GTG (Guess The Gibbs) visualization.
+    Plot entropy tensor for GTG (Graph Transduction Game) visualization.
     Generates two subplots visualizing entropy values over GTG iterations:
     1. First subplot shows entropy history/derivatives for all classes.
     2. Second subplot shows entropy for newly labelled samples vs unlabelled samples.
@@ -949,7 +949,7 @@ def save_yamal(
         (e.g., num_classes, model architecture).
     al_params: Dictionary containing active learning parameters
         (e.g., query_strategy, budget).
-    gt_params: Dictionary containing GTG (Greedy Threshold Gradient)
+    gtg_params: Dictionary containing GTG (Graph Transduction Game)
         specific parameters.
     exp_path: Path to the experiment results directory.
     dataset_name: Name of the dataset being used.

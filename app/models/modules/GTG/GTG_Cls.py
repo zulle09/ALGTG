@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class GTGModule(nn.Module):
     def __init__(self, params) -> None:
         """
-        Initialize the GTG (Graph-Tensor-Graph) module.
+        Initialize the GTG (Graph Transduction Game) module.
         
         Args:
             params: A tuple containing (gtg_p, ll_p) configuration parameters.
@@ -207,7 +207,7 @@ class GTGModule(nn.Module):
         A_matrix = self.get_A_e_d(concat_embedds)
         # Use a raw distance matrix (diagonal=0) for neighbour search so the self-distance
         # is always at sorted index 0 regardless of the AM_self_loop setting.
-        raw_dist = torch.clamp(torch.cdist(concat_embedds, concat_embedds), min=0., max=1.)
+        raw_dist = torch.clamp(torch.cdist(concat_embedds, concat_embedds), min=0.)
         # Guard small batches: use the farthest available neighbour when < 8 samples.
         neigh_idx = min(7, max(concat_embedds.shape[0] - 1, 0))
         seventh_neigh = concat_embedds[torch.argsort(raw_dist, dim=1)[:, neigh_idx]]
@@ -221,7 +221,9 @@ class GTGModule(nn.Module):
         
         A_m_2 = -A_matrix.pow(2)
         sigma_T = sigmas.T
-        sigma_mm = (torch.mm(sigma_T, sigmas))
+        # Guard against sigma_i * sigma_j == 0 (happens when a sample's 7th neighbour is a
+        # duplicate at distance 0), which would produce NaNs that clamp cannot repair.
+        sigma_mm = torch.mm(sigma_T, sigmas).clamp(min=1e-8)
         A = torch.exp(A_m_2 / sigma_mm)
         return torch.clamp(A.to(self.device), min=0., max=1.).fill_diagonal_(1. if self.AM_self_loop else 0.)
     
@@ -231,8 +233,8 @@ class GTGModule(nn.Module):
         Computes the adjacency matrix from concatenated embeddings.
 
         Calculates pairwise Euclidean distances between the input embeddings,
-        clamps the values to the range [0, 1], and sets the diagonal elements
-        based on the self-loop configuration.
+        clamps negative values to 0 (distances are unbounded above), and sets
+        the diagonal elements based on the self-loop configuration.
 
         Args:
             concat_embedds (torch.Tensor): Concatenated embedding tensor of shape
@@ -247,7 +249,10 @@ class GTGModule(nn.Module):
             ValueError: If concat_embedds has invalid dimensions.
         """
         A = torch.cdist(concat_embedds, concat_embedds).to(self.device)
-        return torch.clamp(A, min=0., max=1.).fill_diagonal_(1. if self.AM_self_loop else 0.)
+        # Distances are unbounded above; only clamp the lower bound. Clamping to max=1 here
+        # would saturate every pair farther than 1.0 and collapse the RBF kernel / neighbour
+        # search into an almost-constant matrix.
+        return torch.clamp(A, min=0.).fill_diagonal_(1. if self.AM_self_loop else 0.)
     
 
     def get_A_cos_sim(self, concat_embedds: torch.Tensor) -> torch.Tensor: 
@@ -328,9 +333,11 @@ class GTGModule(nn.Module):
             else: A = torch.where(A > self.get_A_treshold(A), 1, A)
         if self.AM_strategy == 'diversity':
             A = 1 - A # set the whole matrix as a distance matrix and not similarity matrix
-        elif self.AM_strategy == 'mixed':    
-            if self.AM_function == 'rbfk': A = 1 - A # set the unlabelled submatrix as distance matrix and not similarity matrix
-            A[:self.n_lab_obs, :self.n_lab_obs] = 1 - A[:self.n_lab_obs, :self.n_lab_obs] # -> inverse of the similarity matrix / distance matrix
+        elif self.AM_strategy == 'mixed':
+            # corr, cos_sim and rbfk all return a similarity in [0, 1], so the labelled-labelled
+            # block is converted to a distance uniformly. (Previously rbfk also inverted the whole
+            # matrix first, giving it the opposite block geometry from corr/cos_sim.)
+            A[:self.n_lab_obs, :self.n_lab_obs] = 1 - A[:self.n_lab_obs, :self.n_lab_obs] # LL -> distance
             
         return A
         
@@ -529,7 +536,7 @@ class GTGModule(nn.Module):
             weight: int = 1
         ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], torch.Tensor | None]: 
         """
-        Forward pass for the GTG (Guess Then Guess) model.
+        Forward pass for the GTG (Graph Transduction Game) model.
         Performs a forward pass through the GTG module to compute predictions
         and ground truth labels for active learning scenarios.
         Args:

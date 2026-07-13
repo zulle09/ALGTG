@@ -128,8 +128,9 @@ class GTG_off(ActiveLearner):
             # set the unlabelled submatrix as distance matrix and not similarity matrix
             n_lab_obs = len(self.labelled_indices)
             
-            # LL -> DISTANCE
-            if self.AM_function == 'rbfk': A = 1 - A
+            # corr, cos_sim and rbfk all return a similarity in [0, 1]; the requested blocks are
+            # converted to distances uniformly below. (rbfk used to invert the whole matrix first,
+            # which flipped its block geometry relative to corr/cos_sim.)
             for AM_m_d in self.AM_mixed_distance:
                 if AM_m_d == 'LL': A[:n_lab_obs, :n_lab_obs] = 1 - A[:n_lab_obs, :n_lab_obs] # LL -> DISTANCE
                 elif AM_m_d == 'UU': A[n_lab_obs:, n_lab_obs:] = 1 - A[n_lab_obs:, n_lab_obs:] # UU -> DISTANCE
@@ -187,7 +188,7 @@ class GTG_off(ActiveLearner):
         A_matrix = self.get_A_e_d(concat_embedds, to_cpu)
         # Use a raw distance matrix (diagonal=0) for neighbour search so the self-distance
         # is always at sorted index 0 regardless of the AM_self_loop setting.
-        raw_dist = torch.clamp(torch.cdist(concat_embedds, concat_embedds), min=0., max=1.).to(device)
+        raw_dist = torch.clamp(torch.cdist(concat_embedds, concat_embedds), min=0.).to(device)
         neigh_idx = min(7, max(concat_embedds.shape[0] - 1, 0))
         seventh_neigh = concat_embedds[torch.argsort(raw_dist, dim=1)[:, neigh_idx]]
             
@@ -198,7 +199,9 @@ class GTG_off(ActiveLearner):
             for i in range(concat_embedds.shape[0]) 
         ], device=device), dim=0)
         
-        A = torch.exp(-A_matrix.pow(2) / (torch.mm(sigmas.T, sigmas))).to(device)
+        # clamp(min=1e-8) guards against sigma_i * sigma_j == 0 (duplicate embeddings at
+        # distance 0), which would otherwise yield NaNs that the clamp below cannot repair.
+        A = torch.exp(-A_matrix.pow(2) / torch.mm(sigmas.T, sigmas).clamp(min=1e-8)).to(device)
         A = torch.clamp(A, min=0., max=1.)
         
         return A.fill_diagonal_(1. if self.AM_self_loop else 0.)
@@ -209,8 +212,8 @@ class GTG_off(ActiveLearner):
         Computes the adjacency matrix from concatenated embeddings.
 
         Calculates pairwise Euclidean distances between all embeddings in the
-        concatenated tensor using torch.cdist, clamps the values to the range
-        [0, 1], and sets the diagonal values based on the self-loop configuration.
+        concatenated tensor using torch.cdist, clamps negative values to 0
+        (distances are unbounded above), and sets the diagonal via the self-loop flag.
 
         Args:
             concat_embedds (torch.Tensor): A tensor of concatenated embeddings
@@ -226,7 +229,10 @@ class GTG_off(ActiveLearner):
                 is False), or 1 if self-loops are enabled (AM_self_loop is True).
         """
         A = torch.cdist(concat_embedds, concat_embedds).to(torch.device('cpu') if to_cpu else self.device)
-        return torch.clamp(A, min=0., max=1.).fill_diagonal_(1. if self.AM_self_loop else 0.)
+        # Distances are unbounded above; only clamp the lower bound. Clamping to max=1 here
+        # would saturate every pair farther than 1.0 and collapse the RBF kernel / neighbour
+        # search into an almost-constant matrix.
+        return torch.clamp(A, min=0.).fill_diagonal_(1. if self.AM_self_loop else 0.)
 
 
 

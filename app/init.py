@@ -201,7 +201,7 @@ def get_masters(
             'lsmlps_gtg', 'lsmlpsA_gtg', 'lstmreg_gtg', 'lstmbc_gtg'.
         BBone (ResNet | VGG): The backbone neural network architecture to use.
         ll_module_params (Dict[str, Any]): Parameters for the LL (Linear Layer) module.
-        gtg_module_params (Dict[str, Any]): Parameters for the GTG (Gated Task Graph) module.
+        gtg_module_params (Dict[str, Any]): Parameters for the GTG (Graph Transduction Game) module.
         dataset_name (str): Name of the dataset being used.
         n_classes (int): Number of classes in the classification task.
     

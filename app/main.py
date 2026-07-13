@@ -8,7 +8,9 @@ import torch
 
 from dataset import Cls_Datasets
 
-torch.autograd.set_detect_anomaly(True)
+# Enable only when debugging NaNs/inf in the backward pass — it roughly doubles
+# training time, so keep it off for full experimental runs.
+# torch.autograd.set_detect_anomaly(True)
 
 from models.BBone_Module import Master_Model
 
@@ -55,7 +57,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument('-am', '--affinity_matrix', type=str, nargs='+', required=False, choices=['corr', 'cos_sim', 'rbfk'], default=['corr'], help='Affinity matrix to choose')
     
     parser.add_argument('-am_md', '--affinity_matrix_mixed_distance', type=str, nargs='+', required=False, choices=['LL', 'UU', 'LU', 'UL'], default=['LL'], help='Affinity matrix portion to convert into distance measure')
-    parser.add_argument('-am_sl', '--affnity_matrix_self_loop', required=False, action='store_false', help='Affinity matrix cells self loop')
+    parser.add_argument('-am_sl', '--affnity_matrix_self_loop', required=False, action='store_true', help='Affinity matrix cells self loop (default: no self loop)')
     
     parser.add_argument('-am_s', '--affinity_matrix_strategy', type=str, required=False, choices=['uncertanity', 'diversity', 'mixed'], default='mixed', 
                        help='Different affinity matrix modification')

@@ -43,7 +43,7 @@ class GTG(ActiveLearner):
         Query the top-k unlabelled observations using the GTG module.
         This method performs active learning query selection by computing predicted
         and true entropies for both labelled and unlabelled data using the GTG 
-        (Guess That Grows) module. It selects the top-k unlabelled observations 
+        (Graph Transduction Game) module. It selects the top-k unlabelled observations
         based on predicted entropy scores.
         Args:
             sample_unlab_subset (Subset): The unlabelled data subset to query from.
