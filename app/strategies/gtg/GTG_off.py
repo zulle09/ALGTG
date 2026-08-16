@@ -33,6 +33,7 @@ class GTG_off(ActiveLearner):
         
         self.AM_mixed_distance = gtg_p["am_md"]
         self.AM_self_loop = gtg_p["am_sl"]
+        self.AM_redundancy: float = gtg_p.get("am_r", 0.) # redundancy weight (0 = standard GTG)
         
         self.ent_strategy: str = gtg_p["e_s"]
 
@@ -118,27 +119,41 @@ class GTG_off(ActiveLearner):
             # remove weak connections with the choosen threshold strategy and value
             logger.info(f' Affinity Matrix Threshold to be used: {self.AM_threshold_strategy} -> {self.get_A_treshold(A) if self.AM_threshold_strategy == "mean" else self.AM_threshold}')
                 
-            if self.AM_function != 'rbfk': A = torch.where(A < self.get_A_treshold(A), 0, A)
-            else: A = torch.where(A > self.get_A_treshold(A), 1, A)
-        
+            # Sparsify uniformly for every kernel. (rbfk previously used `A > t -> 1`, which
+            # saturates strong edges instead of removing weak ones, i.e. it never sparsified.)
+            A = torch.where(A < self.get_A_treshold(A), 0, A)
+
+        n_lab_obs = len(self.labelled_indices)
+
         if self.AM_strategy == 'diversity':
             # set the whole matrix as a distance matrix and not similarity matrix
             A = 1 - A
-        elif self.AM_strategy == 'mixed':    
-            # set the unlabelled submatrix as distance matrix and not similarity matrix
-            n_lab_obs = len(self.labelled_indices)
-            
-            # corr, cos_sim and rbfk all return a similarity in [0, 1]; the requested blocks are
-            # converted to distances uniformly below. (rbfk used to invert the whole matrix first,
-            # which flipped its block geometry relative to corr/cos_sim.)
+            # `1 - A` turns the zero diagonal into 1, silently re-introducing a maximal
+            # self-loop; restore the configured convention.
+            A = A.fill_diagonal_(1. if self.AM_self_loop else 0.)
+        elif self.AM_strategy == 'mixed':
+            # NOTE: labelled players are clamped at every iteration, so only the rows of A
+            # indexed by unlabelled players drive the dynamics: the LL and LU blocks are
+            # mathematically inert and inverting them is a no-op (kept for ablation). Only UU
+            # and UL have any effect. For a redundancy term that actually enters the dynamics
+            # use `am_r` below.
             for AM_m_d in self.AM_mixed_distance:
-                if AM_m_d == 'LL': A[:n_lab_obs, :n_lab_obs] = 1 - A[:n_lab_obs, :n_lab_obs] # LL -> DISTANCE
+                if AM_m_d == 'LL': A[:n_lab_obs, :n_lab_obs] = 1 - A[:n_lab_obs, :n_lab_obs] # LL -> DISTANCE (inert)
                 elif AM_m_d == 'UU': A[n_lab_obs:, n_lab_obs:] = 1 - A[n_lab_obs:, n_lab_obs:] # UU -> DISTANCE
-                elif AM_m_d == 'LU': A[:n_lab_obs, n_lab_obs:] = 1 - A[:n_lab_obs, n_lab_obs:] # LU -> DISTANCE
+                elif AM_m_d == 'LU': A[:n_lab_obs, n_lab_obs:] = 1 - A[:n_lab_obs, n_lab_obs:] # LU -> DISTANCE (inert)
                 else: A[n_lab_obs:, :n_lab_obs] = 1 - A[n_lab_obs:, :n_lab_obs] # UL -> DISTANCE
-            
-               
-                
+            A = A.fill_diagonal_(1. if self.AM_self_loop else 0.)
+
+        # Redundancy term (lambda >= 0, `am_r`). Amplifies the labelled->unlabelled coupling so
+        # that unlabelled points close to the already-labelled set are pulled harder, converge
+        # sooner, and hence obtain a lower entropy trajectory — making them less likely to be
+        # queried. Acts on UL (the block that actually drives the dynamics) and is mirrored on LU
+        # to keep W symmetric. lambda = 0 recovers standard GTG.
+        if self.AM_redundancy > 0. and 0 < n_lab_obs < A.shape[0]:
+            A[n_lab_obs:, :n_lab_obs] = A[n_lab_obs:, :n_lab_obs] * (1. + self.AM_redundancy)
+            A[:n_lab_obs, n_lab_obs:] = A[:n_lab_obs, n_lab_obs:] * (1. + self.AM_redundancy)
+
+
         # plot the TSNE fo the original and modified affinity matrix
         logger.info('Plotting TSNE of the original and modified Affinity Matrix...')
         plot_tsne_A(
@@ -281,7 +296,9 @@ class GTG_off(ActiveLearner):
             The correlation matrix is computed using torch.corrcoef which treats rows
             as observations and computes the correlation between columns.
         """
-        A = torch.corrcoef(concat_embedds).to(torch.device('cpu') if to_cpu else self.device)
+        # torch.corrcoef yields NaN for constant (zero-variance) rows — e.g. a dead ReLU
+        # embedding. clamp() cannot repair a NaN, so map it explicitly to 0 (no affinity).
+        A = torch.nan_to_num(torch.corrcoef(concat_embedds), nan=0.).to(torch.device('cpu') if to_cpu else self.device)
         return torch.clamp(A, min=0., max=1.).fill_diagonal_(1. if self.AM_self_loop else 0.)
         
 
@@ -365,8 +382,14 @@ class GTG_off(ActiveLearner):
         while err > self.gtg_tol and i < self.gtg_max_iter:
             X_old = torch.clone(self.X)
 
-            self.X *= torch.mm(self.A, self.X)
-            self.X /= torch.sum(self.X, dim=1, keepdim=True).clamp(min=1e-8)
+            X_num = self.X * torch.mm(self.A, self.X)
+            row_sum = torch.sum(X_num, dim=1, keepdim=True)
+            # A player receiving no payoff from anyone (isolated node, e.g. after thresholding)
+            # has an undefined 0/0 update and no incentive to move: keep its previous strategy.
+            # Dividing by a clamped 0 would collapse it to the zero vector, which leaves the
+            # simplex, breaks the game interpretation, and yields entropy ~0 so the point could
+            # never be queried.
+            self.X = torch.where(row_sum <= 1e-12, self.X, X_num / row_sum.clamp(min=1e-8))
 
             # Keep labelled observations fixed as hard anchors during propagation.
             if n_lab_obs > 0:

@@ -1,0 +1,325 @@
+% ===========================================================================
+%  ALGTG — Active Learning through the Graph Transduction Game
+%  Generic arXiv preprint (self-contained: compiles with a stock TeX Live /
+%  MacTeX install, no conference style file required).
+%
+%  BUILD:  pdflatex main -> bibtex main -> pdflatex main -> pdflatex main
+%
+%  STATUS: Related Work, Background and Method are drafted. Everything marked
+%  %% TODO needs your real numbers / figures after the baselines are re-run.
+% ===========================================================================
+
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{times}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\newtheorem{proposition}{Proposition}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{caption}
+\usepackage[round]{natbib}          % author-year citations via \citep / \citet
+\usepackage{url}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\title{\textbf{Active Learning through the Graph Transduction Game}}
+\author{
+  Riccardo Zuliani\thanks{Correspondence: \texttt{riccardo.zuliani99@gmail.com}} \\
+  %% TODO: affiliation and co-authors
+  \textit{Affiliation}
+}
+\date{}
+
+\begin{document}
+\maketitle
+
+% ---------------------------------------------------------------------------
+\begin{abstract}
+%% TODO — finalize once results are in. Draft:
+Deep networks are data-hungry, yet high-quality annotation is expensive, which
+renews the case for active learning (AL): selecting the few samples whose labels
+help the most. We revisit AL through the lens of the \emph{Graph Transduction Game}
+(GTG), an evolutionary, non-cooperative game whose replicator dynamics propagate
+labels from a small labelled set to unlabelled points and settle at a consistent
+(Nash) labelling. Our key observation is that the \emph{trajectory} of a sample's
+label entropy under these dynamics is a strong signal of informativeness: points
+that remain uncertain or oscillate the longest are the most valuable to annotate.
+We introduce \textbf{ALGTG}, an acquisition function built on this signal. We further
+show that avoiding redundant queries need not be hard-coded into the payoff: once
+labelled players are clamped, large parts of the payoff matrix provably do not
+influence the game, and the suppression of samples already well explained by the
+labelled set \emph{emerges} from the dynamics themselves. We make this precise and
+add a single-parameter term that amplifies the effect where it is actually
+effective. Finally, we present an end-to-end differentiable variant that learns the
+signal jointly with the backbone. On CIFAR-10/100, SVHN, Fashion-MNIST and
+Tiny-ImageNet, ALGTG %% TODO: headline result vs. strongest baseline.
+\end{abstract}
+
+% ---------------------------------------------------------------------------
+\section{Introduction}
+%% TODO — expand. Suggested arc:
+%% (1) DL needs labels; annotation is costly; AL matters.
+%% (2) Existing AL scores are largely *static*: a single uncertainty or diversity
+%%     value per sample from a frozen model. They ignore how a label assignment
+%%     *behaves* under transductive propagation across the data manifold.
+%% (3) Insight: run the Graph Transduction Game and watch each unlabelled sample's
+%%     entropy evolve; the dynamics encode both uncertainty and (via the payoff)
+%%     redundancy w.r.t. already-labelled points.
+%% (4) Contributions:
+
+\noindent\textbf{Contributions.}
+\begin{itemize}
+  \item A novel AL acquisition function based on the \emph{entropy trajectory} of
+        samples under Graph Transduction Game dynamics.
+  \item An analysis of \emph{which blocks of the payoff matrix actually drive the
+        game} once labelled players are clamped (Proposition~\ref{prop:inert}). It
+        follows that redundancy avoidance is an emergent property of GTG rather than
+        something that must be engineered into the payoff; we also derive a
+        one-parameter term that amplifies it where it is effective.
+  \item An end-to-end differentiable variant that learns the acquisition signal
+        jointly with the task network, so representation and selection co-adapt.
+  \item %% TODO: empirical claim — SOTA / competitive on N benchmarks with M trials.
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\section{Related Work}
+
+\paragraph{Uncertainty-based AL.} Classical strategies query the points where the
+current model is least confident, using predictive entropy, margin or least
+confidence \citep{settles2009active}. Bayesian variants estimate epistemic
+uncertainty via the mutual information between predictions and model parameters
+(BALD) \citep{houlsby2011bayesian}, made practical for deep nets through MC-dropout
+\citep{gal2017deep} and extended to the batch setting by BatchBALD
+\citep{kirsch2019batchbald}. Pure uncertainty ignores redundancy and tends to
+select correlated batches.
+
+\paragraph{Diversity and hybrid AL.} Representation-driven methods instead cover
+the feature space: Core-Set casts batch selection as a $k$-center problem over
+embeddings \citep{sener2018active}. Hybrid methods combine both cues: BADGE runs
+$k$-means\texttt{++} on \emph{gradient} embeddings, whose magnitude encodes
+uncertainty and direction encodes diversity \citep{ash2020deep}; AlphaMix probes
+for decision-boundary instability by interpolating unlabelled features toward
+labelled class anchors \citep{parvaneh2022active}; CDAL measures contextual
+diversity through KL divergence of predictive distributions \citep{agarwal2020contextual}.
+
+\paragraph{Learned acquisition.} A parallel line learns the acquisition signal.
+Learning Loss attaches a module that predicts each sample's loss and queries the
+highest-loss points \citep{yoo2019learning}. VAAL trains a VAE--discriminator to
+tell labelled from unlabelled in latent space \citep{sinha2019variational}, and
+TA-VAAL makes it task-aware by feeding in a learned loss/rank
+\citep{kim2021task}. TiDAL exploits training dynamics as a supervisory signal for
+the acquisition head \citep{kye2023tidal}.
+
+\paragraph{Graph-based and transductive AL.} Closest to our work, Sequential GCN
+builds a graph over labelled and unlabelled samples and learns node
+representations to rank informativeness \citep{caramalau2021sequential}. Our method
+is also graph-based but differs fundamentally: rather than learning graph
+embeddings, we run the \emph{Graph Transduction Game}
+\citep{erdem2012graph}---an evolutionary game whose replicator dynamics generalize
+classical relaxation labelling \citep{pelillo1997dynamics}---and derive the
+acquisition signal from the \emph{temporal evolution} of label entropy under those
+dynamics. To our knowledge, GTG dynamics have not previously been used as an AL
+acquisition function.
+
+% ---------------------------------------------------------------------------
+\section{Background: The Graph Transduction Game}
+
+Given $n$ objects (players) and $c$ labels (pure strategies), GTG casts
+transductive labelling as a non-cooperative game \citep{erdem2012graph}. Player
+$i$ holds a mixed strategy $x_i \in \Delta^{c-1}$ (a distribution over labels),
+and players receive payoff for agreeing with \emph{similar} players, encoded by a
+non-negative affinity matrix $W \in \mathbb{R}^{n\times n}$. Writing
+$x=(x_1,\dots,x_n)$, the population evolves by the multi-population replicator
+dynamics
+\begin{equation}
+  x_{i}^{(t+1)} \;=\; x_{i}^{(t)} \odot
+  \frac{\big(W x^{(t)}\big)_{i}}{\,x_{i}^{(t)\top}\big(W x^{(t)}\big)_{i}\,},
+  \label{eq:replicator}
+\end{equation}
+where $\odot$ is the elementwise product and the ratio is taken per label. Labelled
+players are clamped to their one-hot strategies throughout. The dynamics increase
+average payoff monotonically and converge to a Nash equilibrium---a labelling that
+is consistent with the affinity structure and the labelled seeds.
+
+% ---------------------------------------------------------------------------
+\section{Method: ALGTG}
+
+Let $L$ and $U$ be the labelled and unlabelled sets and $\phi(\cdot)$ the backbone
+feature map. For a pool of $n=|L|+|U|$ samples we build a payoff matrix, run the
+game, and score unlabelled samples by their entropy trajectory.
+
+\paragraph{Payoff construction.} We form $W$ from a similarity kernel over features,
+$W_{ij}=k\big(\phi(x_i),\phi(x_j)\big)$, with $k$ one of cosine similarity,
+Pearson correlation, or a self-tuning RBF kernel whose per-point bandwidth is the
+distance to the $7$th nearest neighbour \citep{zelnikmanor2004self}. Because the
+replicator update~\eqref{eq:replicator} requires a non-negative payoff to keep
+$x_i$ on the simplex, we clamp $W$ to $[0,1]_{\ge 0}$ and use a zero diagonal, so no
+player is rewarded for agreeing with itself. An optional threshold (a fixed value or
+the matrix mean) sparsifies weak edges.
+
+\paragraph{Initialization and dynamics.} We set $x_i^{(0)}=e_{y_i}$ for $i\in L$
+and $x_i^{(0)}=\tfrac{1}{c}\mathbf{1}$ for $i\in U$, then iterate
+\eqref{eq:replicator} re-clamping the labelled rows each step, until
+$\lVert x^{(t+1)}-x^{(t)}\rVert < \varepsilon$ or a maximum of $T$ iterations. If a
+player receives no payoff from anyone---an isolated node, which sparsification can
+create---its update is $0/0$; we adopt the natural convention that such a player has
+no incentive to deviate and keep $x_i^{(t+1)}=x_i^{(t)}$. This keeps every player on
+the simplex; normalizing by a floored denominator would instead collapse the row to
+the zero vector, silently removing the point from the game and assigning it zero
+entropy.
+
+\paragraph{Which blocks of the payoff drive the game?} Partitioning $W$ into blocks
+$W_{LL},W_{LU},W_{UL},W_{UU}$ induced by $L$ and $U$ yields a simple but consequential
+observation.
+
+\begin{proposition}\label{prop:inert}
+If the labelled players are clamped at every iteration, then the trajectory
+$\{x_U^{(t)}\}_{t\ge 0}$ of the unlabelled players---and hence any acquisition score
+derived from it---depends on $W$ only through $W_{UU}$ and $W_{UL}$. The blocks
+$W_{LL}$ and $W_{LU}$ are inert.
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+The update of player $i$ in \eqref{eq:replicator} depends on $W$ only through row
+$i$, namely $(Wx)_i=\sum_j W_{ij}x_j$. For $i\in U$ this row meets only the columns
+of $L$ and $U$ within $W_{UL}$ and $W_{UU}$. Rows indexed by $i\in L$---the only rows
+in which $W_{LL}$ and $W_{LU}$ appear---are overwritten by the clamp before they are
+used. \end{proof}
+
+Proposition~\ref{prop:inert} has a practical corollary: any attempt to steer the
+acquisition by editing $W_{LL}$ (for instance, turning labelled--labelled affinities
+into distances so that annotated points ``repel'' each other, an intuitive design we
+initially adopted) has \emph{no effect whatsoever} on the selected batch. We verify
+this numerically: such edits leave the acquisition scores identical to machine
+precision.
+
+\paragraph{Redundancy avoidance is emergent.} Rather than a defect, this delimits
+where the mechanism actually lives. An unlabelled point lying close to the labelled
+set receives, through $W_{UL}$, a strong and coherent pull toward a single label; it
+commits almost immediately, so its entropy trajectory is short and its score low.
+A point in a region the labelled set does not explain receives weak or conflicting
+pull and remains uncertain for many iterations, earning a high score. Standard GTG
+dynamics therefore already suppress redundant queries, with no bespoke payoff term.
+To \emph{modulate} the strength of this effect we introduce a single non-negative
+parameter $\lambda$ that scales the labelled--unlabelled coupling,
+\begin{equation}
+  W_{UL} \leftarrow (1+\lambda)\,W_{UL},
+  \qquad W_{LU} \leftarrow (1+\lambda)\,W_{LU},
+  \label{eq:redundancy}
+\end{equation}
+with $\lambda=0$ recovering standard GTG. Because clamped labelled players enter the
+potential of the restricted game on $U$ only through a linear term, \eqref{eq:redundancy}
+preserves non-negativity and the symmetry of $W_{UU}$, so the Baum--Eagon convergence
+guarantee is unaffected. Empirically, increasing $\lambda$ monotonically widens the
+score gap between redundant and informative samples. %% TODO: cite the ablation figure.
+
+\paragraph{Acquisition by entropy trajectory.} For each unlabelled sample we record
+the Shannon entropy of its strategy at every iteration,
+$H_i^{(t)} = -\sum_{k} x_{ik}^{(t)} \log x_{ik}^{(t)}$, and aggregate the trajectory
+either by its mean or by its area (trapezoidal integral):
+\begin{equation}
+  s_i \;=\; \tfrac{1}{T}\!\sum_{t=1}^{T} H_i^{(t)}
+  \quad\text{or}\quad
+  s_i \;=\; \textstyle\int_{1}^{T} H_i^{(t)}\,dt .
+\end{equation}
+We query the top-$k$ unlabelled samples by $s_i$. Intuitively, a point whose label
+assignment settles immediately is easily explained by its neighbours and carries
+little new information, whereas a point that stays uncertain or oscillates under
+propagation lies where the current model and manifold structure disagree---exactly
+where a label is most useful.
+
+\begin{algorithm}[t]
+\caption{ALGTG acquisition (offline)}
+\label{alg:algtg}
+\begin{algorithmic}[1]
+\REQUIRE features $\phi(x)$ for $L\cup U$, budget $k$, iterations $T$, tol.\ $\varepsilon$
+\STATE build payoff $W$ (kernel, clamp, mixed distance, threshold)
+\STATE init $x^{(0)}$ (one-hot for $L$, uniform for $U$)
+\FOR{$t=0$ \TO $T-1$}
+  \STATE update $x^{(t+1)}$ by Eq.~\eqref{eq:replicator}; clamp labelled rows
+  \STATE record $H_i^{(t+1)}$ for $i\in U$
+  \STATE \textbf{if} $\lVert x^{(t+1)}-x^{(t)}\rVert<\varepsilon$ \textbf{then break}
+\ENDFOR
+\STATE $s_i \leftarrow \mathrm{aggregate}(H_i^{(1:T)})$ for $i\in U$
+\RETURN top-$k$ unlabelled samples by $s_i$
+\end{algorithmic}
+\end{algorithm}
+
+\paragraph{End-to-end differentiable variant.} The offline scheme runs GTG on
+frozen embeddings after training. We also propose an online variant in which a
+lightweight module projects intermediate backbone features to a low-dimensional
+space, runs the \emph{differentiable} dynamics~\eqref{eq:replicator} on the induced
+affinity, and reads the entropy trajectory through an MLP or LSTM head to predict
+$s_i$. The head is trained jointly with the task loss by regressing the GTG entropy
+computed on the full embeddings (a teacher signal), so gradients from the
+acquisition objective also shape the representation. This mirrors the auxiliary
+training of Learning Loss \citep{yoo2019learning} but with a game-theoretic,
+transduction-derived target. %% TODO: state which variant is the final "ALGTG"
+%% and move the others to the ablation.
+
+% ---------------------------------------------------------------------------
+\section{Experiments}
+
+\paragraph{Setup.} %% TODO
+Backbone ResNet-18 \citep{he2016deep} (VGG-16-bn for Caltech-256). AL protocol:
+$1000$ initial labelled samples, $10$ cycles of $+1000$, a random unlabelled pool
+of $10{,}000$ per cycle, $200$ epochs per cycle, averaged over $5$ trials; we
+report mean and $95\%$ confidence intervals.
+
+\paragraph{Baselines.} Random, Entropy, Core-Set \citep{sener2018active},
+BADGE \citep{ash2020deep}, BALD \citep{gal2017deep}, Learning Loss
+\citep{yoo2019learning}, VAAL/TA-VAAL \citep{sinha2019variational,kim2021task},
+CDAL \citep{agarwal2020contextual}, AlphaMix \citep{parvaneh2022active},
+TiDAL \citep{kye2023tidal}, and the graph-based Sequential GCN
+\citep{caramalau2021sequential}.
+%% NOTE: BALD, AlphaMix and BADGE were re-run after correctness fixes; do not
+%% report any pre-fix numbers.
+
+%% TODO main results table
+\begin{table}[t]
+\centering
+\caption{Test accuracy (\%) vs.\ labelling budget. Mean over 5 trials. %% TODO}
+\label{tab:main}
+\begin{tabular}{lccc}
+\toprule
+Method & 2k & 5k & 10k \\
+\midrule
+Random        & -- & -- & -- \\
+\dots         & -- & -- & -- \\
+\textbf{ALGTG} (ours) & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Ablations.} %% TODO — each isolates one design choice:
+(i) affinity kernel (cosine / correlation / RBF);
+(ii) entropy aggregation (mean vs.\ integral);
+(iii) offline vs.\ online, and head architecture (MLP vs.\ LSTM);
+(iv) the redundancy weight $\lambda$ of Eq.~\eqref{eq:redundancy}, swept from $0$
+     (standard GTG) upward, quantifying how much explicit amplification adds over
+     the emergent behaviour;
+(v) \textbf{the central control}: the acquisition signal itself---the full entropy
+     \emph{trajectory} versus only the entropy at convergence, versus the plain
+     softmax entropy of the backbone. This isolates whether the \emph{dynamics},
+     and not merely the final labelling or the model's own confidence, carry the
+     information.
+
+\paragraph{Analysis.} %% TODO — entropy-trajectory plots separating queried vs.\
+non-queried samples; t-SNE of selections vs.\ competitors; cost/runtime discussion.
+
+% ---------------------------------------------------------------------------
+\section{Conclusion}
+%% TODO — recap contribution, headline result, and limitations (affinity/GTG
+%% cost scales with pool size; offline t-SNE diagnostics are expensive).
+
+% ---------------------------------------------------------------------------
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

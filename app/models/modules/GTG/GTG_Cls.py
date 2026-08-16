@@ -75,6 +75,7 @@ class GTGModule(nn.Module):
         self.AM_strategy: str = gtg_p["am_s"]
         self.AM_self_loop = gtg_p["am_sl"]
         self.AM_threshold: float = gtg_p["am_t"]
+        self.AM_redundancy: float = gtg_p.get("am_r", 0.) # redundancy weight (0 = standard GTG)
         
         self.list_AM_threshold_strategy: List[str] = gtg_p["am_ts"]
         self.list_AM_function: List[str] = gtg_p["am"]
@@ -302,7 +303,9 @@ class GTGModule(nn.Module):
             The correlation coefficient is computed using torch.corrcoef, which
             standardizes the input before calculating the Pearson correlation.
         """
-        A = torch.corrcoef(concat_embedds).to(self.device)
+        # torch.corrcoef yields NaN for constant (zero-variance) rows — e.g. a dead ReLU
+        # embedding. clamp() cannot repair a NaN, so map it explicitly to 0 (no affinity).
+        A = torch.nan_to_num(torch.corrcoef(concat_embedds), nan=0.).to(self.device)
         return torch.clamp(A, min=0., max=1.).fill_diagonal_(1. if self.AM_self_loop else 0.)
     
     
@@ -329,16 +332,34 @@ class GTGModule(nn.Module):
         else: raise AttributeError('A Fucntion is None')
                 
         if self.AM_threshold_strategy != 'none':
-            if self.AM_function != 'rbfk': A = torch.where(A < self.get_A_treshold(A), 0, A)
-            else: A = torch.where(A > self.get_A_treshold(A), 1, A)
+            # Sparsify uniformly for every kernel. (rbfk previously used `A > t -> 1`, which
+            # saturates strong edges instead of removing weak ones, i.e. it never sparsified.)
+            A = torch.where(A < self.get_A_treshold(A), 0, A)
+
         if self.AM_strategy == 'diversity':
             A = 1 - A # set the whole matrix as a distance matrix and not similarity matrix
+            # `1 - A` turns the zero diagonal into 1, i.e. it silently re-introduces a maximal
+            # self-loop; restore the configured convention.
+            A = A.fill_diagonal_(1. if self.AM_self_loop else 0.)
         elif self.AM_strategy == 'mixed':
-            # corr, cos_sim and rbfk all return a similarity in [0, 1], so the labelled-labelled
-            # block is converted to a distance uniformly. (Previously rbfk also inverted the whole
-            # matrix first, giving it the opposite block geometry from corr/cos_sim.)
+            # NOTE: labelled players are clamped to their one-hot strategy at every iteration,
+            # so only the rows of A indexed by unlabelled players drive the dynamics: the LL and
+            # LU blocks are mathematically inert. This inversion is therefore a no-op and is kept
+            # only for backward compatibility / ablation. Use `am_r` for a redundancy term that
+            # actually enters the dynamics.
             A[:self.n_lab_obs, :self.n_lab_obs] = 1 - A[:self.n_lab_obs, :self.n_lab_obs] # LL -> distance
-            
+            A = A.fill_diagonal_(1. if self.AM_self_loop else 0.)
+
+        # Redundancy term (lambda >= 0, `am_r`). Amplifies the labelled->unlabelled coupling so
+        # that unlabelled points close to the already-labelled set are pulled harder, converge
+        # sooner, and hence obtain a lower entropy trajectory — making them less likely to be
+        # queried. Acts on UL (the block that actually drives the dynamics) and is mirrored on LU
+        # to keep W symmetric. lambda = 0 recovers standard GTG.
+        if self.AM_redundancy > 0. and 0 < self.n_lab_obs < A.shape[0]:
+            nl = self.n_lab_obs
+            A[nl:, :nl] = A[nl:, :nl] * (1. + self.AM_redundancy)
+            A[:nl, nl:] = A[:nl, nl:] * (1. + self.AM_redundancy)
+
         return A
         
         
@@ -440,9 +461,15 @@ class GTGModule(nn.Module):
 
             X_old = X.detach().clone()
 
-            X = X * torch.mm(A, X)
-            if X.requires_grad: X.register_hook(lambda grad: logger.info(f'2- X grad: {grad.sum()}'))
-            X = X / torch.sum(X, dim=1, keepdim=True).clamp(min=1e-8)
+            X_num = X * torch.mm(A, X)
+            if X_num.requires_grad: X_num.register_hook(lambda grad: logger.info(f'2- X grad: {grad.sum()}'))
+            row_sum = torch.sum(X_num, dim=1, keepdim=True)
+            # A player that receives no payoff from anyone (an isolated node, e.g. after
+            # thresholding) has an undefined 0/0 update and no incentive to move: keep its
+            # previous strategy. Dividing by a clamped 0 would instead collapse it to the zero
+            # vector, which leaves the simplex, breaks the game interpretation, and yields
+            # entropy ~0 so the point could never be queried.
+            X = torch.where(row_sum <= 1e-12, X, X_num / row_sum.clamp(min=1e-8))
             if X.requires_grad: X.register_hook(lambda grad: logger.info(f'3- X grad: {grad.sum()}'))
 
             # Keep labelled observations fixed as hard anchors during propagation.

@@ -63,8 +63,12 @@ def get_args() -> argparse.Namespace:
                        help='Different affinity matrix modification')
     parser.add_argument('-am_ts', '--affinity_matrix_threshold_strategies', type=str, required=False, nargs='+', choices=['threshold', 'mean', 'none'], default=['mean', 'none'],
                         help='Possible treshold strategy types to choose to apply in the affinity matrix')
-    parser.add_argument('-am_t', '--affinity_matrix_threshold', type=float, required=False, default=0.5, 
+    parser.add_argument('-am_t', '--affinity_matrix_threshold', type=float, required=False, default=0.5,
                         help='Affinity Matrix Threshold for our method, when threshold_strategy = mean, this is ignored')
+    parser.add_argument('-am_r', '--affinity_matrix_redundancy', type=float, required=False, default=0.0,
+                        help='Redundancy weight lambda >= 0: amplifies the labelled->unlabelled coupling so that '
+                             'samples redundant with the labelled set converge sooner and are less likely to be '
+                             'queried. 0 (default) recovers standard GTG')
     parser.add_argument('-e_s', '--entropy_strategy', type=str, required=False, choices=['mean', 'integral'], default='mean',
                         help='Entropy strategy to sum up the entropy history')
     
@@ -163,6 +167,7 @@ def main() -> None:
         'am_s': args.affinity_matrix_strategy,
         'am_ts': args.affinity_matrix_threshold_strategies,
         'am_t': args.affinity_matrix_threshold,
+        'am_r': args.affinity_matrix_redundancy,
         'e_s': args.entropy_strategy,
         'am_md': args.affinity_matrix_mixed_distance,
         'am_sl': args.affnity_matrix_self_loop,
