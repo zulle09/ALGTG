@@ -30,6 +30,11 @@ class ActiveLearner():
         
         self.ct_p: Dict[str, Any] = ct_p
         self.t_p: Dict[str, Any] = t_p
+
+        # Expensive analysis artefacts (t-SNE, affinity plots, image dumps) are opt-in: on a full
+        # benchmark they can cost more wall-clock than the training itself. Accuracy CSVs and
+        # train/val curves are unaffected.
+        self.diagnostics: bool = self.ct_p.get("diagnostics", False)
         
         self.device: torch.device = self.ct_p["device"]
         self.model: Master_Model = self.ct_p["Master_Model"]
@@ -98,6 +103,10 @@ class ActiveLearner():
             OSError: If there are issues creating directories or saving files.
 
         """
+        if not self.diagnostics:
+            logger.info(' => Skipping the new-labelled image dump (enable with -diag)')
+            return
+
         logger.info(f' => Iteration {self.iter} Method {self.strategy_name} - Saving the new labelled images for further visual analysis...')
         create_class_dir(base_path=self.path, iter=self.iter, classes=self.dataset.classes)
         
@@ -251,7 +260,10 @@ class ActiveLearner():
             - The plot is saved to the experiment path specified in the configuration.
         """
         # plot the tsne graph for each iteration
-        
+        if not self.diagnostics:
+            logger.info(' => Skipping the TSNE embeddings plot (enable with -diag)')
+            return
+
         logger.info(' => Saving the TSNE embeddings plot with labelled, unlabelled and new labelled observations')
         
         dl_dict = dict(batch_size=self.batch_size, shuffle=False)

@@ -155,12 +155,15 @@ class GTG_off(ActiveLearner):
 
 
         # plot the TSNE fo the original and modified affinity matrix
-        logger.info('Plotting TSNE of the original and modified Affinity Matrix...')
-        plot_tsne_A(
-            (initial_A, A),
-            (self.lab_embedds_dict["labels"], self.unlab_embedds_dict["labels"]), self.dataset.classes,
-            self.ct_p["exp_path"], self.ct_p["dataset_name"], self.ct_p["trial"], self.strategy_name, self.AM_function, self.AM_strategy, self.iter
-        )
+        # NOTE: this runs t-SNE twice on an N x N matrix (N grows to ~20k), which is by far the
+        # most expensive step of a query — hence gated behind -diag.
+        if self.diagnostics:
+            logger.info('Plotting TSNE of the original and modified Affinity Matrix...')
+            plot_tsne_A(
+                (initial_A, A),
+                (self.lab_embedds_dict["labels"], self.unlab_embedds_dict["labels"]), self.dataset.classes,
+                self.ct_p["exp_path"], self.ct_p["dataset_name"], self.ct_p["trial"], self.strategy_name, self.AM_function, self.AM_strategy, self.iter
+            )
         
         self.A = A.to(self.device)
         logger.info(' DONE\n')
@@ -494,10 +497,11 @@ class GTG_off(ActiveLearner):
         overall_topk = torch.topk(entropy_measures, k=n_top_k_obs).indices.tolist()
                 
         # plot entropy history tensor
-        plot_gtg_entropy_tensor(
-            tensor=self.unlab_entropy_hist, topk=overall_topk, lab_unlabels=self.unlab_embedds_dict["labels"].tolist(), classes=self.dataset.classes, 
-            path=self.path, iter=self.iter - 1, max_x=self.gtg_max_iter, dir='history'
-        )
+        if self.diagnostics:
+            plot_gtg_entropy_tensor(
+                tensor=self.unlab_entropy_hist, topk=overall_topk, lab_unlabels=self.unlab_embedds_dict["labels"].tolist(), classes=self.dataset.classes,
+                path=self.path, iter=self.iter - 1, max_x=self.gtg_max_iter, dir='history'
+            )
                     
         del self.unlab_entropy_hist
         gc.collect()

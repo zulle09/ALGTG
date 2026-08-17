@@ -50,13 +50,20 @@ class CDAL(ActiveLearner):
             torch.Size([2, 2])
         """
         dist = torch.zeros((a.size(0), b.size(0)))
-        
+
+        # Softmax outputs can underflow to exactly 0 in float32 when logits are far apart.
+        # log(0) = -inf then makes `p * log(p/q)` evaluate to 0 * -inf = NaN, and a NaN in the
+        # distance makes argmax in furthest_first return the same index forever -> duplicate
+        # selections -> "list.remove(x): x not in list" when the sets are updated.
+        a = a.clamp(min=1e-12)
+        b = b.clamp(min=1e-12)
+
         for i in range(b.size(0)):
             b_i = b[i]
             kl1 = a * torch.log(a / b_i)
             kl2 = b_i * torch.log(b_i / a)
             dist[:, i] = 0.5 * (torch.sum(kl1, dim=1)) + 0.5 * (torch.sum(kl2, dim=1))
-            
+
         return dist
 
 
@@ -105,9 +112,13 @@ class CDAL(ActiveLearner):
 
         while len(overall_topk) < n_top_k_obs:
             idx = torch.argmax(min_dist)
-            overall_topk.append(idx.item())
+            overall_topk.append(int(idx.item()))
             dist_new_ctr = self.kl_pairwise_distances(X, X[idx].unsqueeze(0))
             min_dist = torch.min(min_dist, dist_new_ctr[:, 0])
+            # Explicitly retire the chosen point. Relying on "distance to itself is 0" breaks
+            # whenever several points tie at the running minimum, which would re-select an index
+            # already in the batch.
+            min_dist[idx] = float('-inf')
 
         return overall_topk
 

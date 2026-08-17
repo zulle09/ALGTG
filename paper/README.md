@@ -24,12 +24,56 @@ Produces `main.pdf`.
    python app/tests/test_baseline_fixes.py
    python app/tests/test_gtg_smoke.py
    python app/tests/test_gtg_theory.py
+   python app/tests/test_utils_fixes.py
    ```
    `test_gtg_theory.py` guards the claims the paper makes: Proposition 1 (the W_LL / W_LU
    blocks are inert), the redundancy term's effect, and the pathologies that were fixed.
    If one of these fails, a statement in the paper is no longer true of the code.
+   `test_utils_fixes.py` guards the reporting path — CSV integrity, CI computation with a
+   single trial, figure leaks — i.e. the code that produces the numbers you will publish.
 2. **Pick ONE flagship ALGTG variant** (best/most principled) and demote the other six to an architecture ablation.
-3. **Add Sequential GCN** (Caramalau et al., CVPR 2021) — the closest graph-based competitor.
+3. ~~Add Sequential GCN~~ — **done**: `uncertaingcn` and `coregcn` are implemented
+   (`app/strategies/competitors/GCN/`) and registered in the CLI.
+
+## Running the benchmark
+
+Diagnostics (t-SNE, affinity plots, image dumps) are **off by default** — they can cost more
+wall-clock than the training itself. Add `-diag` on a single run if you want the figures.
+
+Smoke run first (catches crashes before a multi-day sweep):
+```
+python app/main.py -gpus 1 -tr 1 -ds cifar10 -m random entropy coreset badge bald cdal alphamix uncertaingcn coregcn ll gtg
+```
+Then the full sweep via `run_sweep.py`, which runs **one method per process** into a shared
+results folder, records failures without aborting the rest, and **skips whatever already
+finished** when re-run — so a crash or an SSH drop costs one method, not the whole sweep:
+
+```
+python run_sweep.py -o run1 -ds cifar10 --trials 1 -m random     # time one method first
+python run_sweep.py -o run1 -ds cifar10 --trials 5               # the real sweep
+python run_sweep.py -o run1 -ds cifar10 --status                 # progress at any time
+```
+Launch it under `tmux`/`nohup`. It prints a running ETA and, at the end, the exact
+`make_results.py` command to run.
+
+Per-method isolated smoke check (miniature protocol, seconds per method — use this to catch
+crashes before a multi-day run):
+```
+for m in random entropy coreset badge bald cdal alphamix uncertaingcn coregcn ll tidal tavaal gtg ll_gtg lsmlps_gtg; do python app/tests/smoke_run.py $m || echo "FAIL $m"; done
+```
+
+## From results to paper
+
+`make_results.py` turns the benchmark CSV into the table and figure, so no number is ever
+transcribed by hand:
+```
+python paper/make_results.py results/<exp_path> cifar10 --budgets 2000 4000 6000 8000 10000
+```
+It writes `results_cifar10.tex` (booktabs table, best per column in bold), `curve_cifar10.pdf`
+(accuracy vs. budget with CI bands) and `summary_cifar10.txt` (AUBC ranking, for the prose).
+`main.tex` picks the table up automatically via `\IfFileExists`, falling back to a placeholder
+when it is absent — so the document always compiles. Missing method/budget cells render as `--`
+rather than being invented.
 
 ## Ablations that must be in the paper
 - **`-am_r` sweep** (λ = 0, 0.5, 1, 2, …): λ=0 is standard GTG. Quantifies how much explicit

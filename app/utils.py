@@ -28,6 +28,34 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# Markers cycled through when plotting one line per method. Indexed modulo its length so that
+# adding a 21st method does not raise IndexError halfway through a sweep.
+MARKERS = ['o', 's', '^', 'D', 'v', 'P', 'X', '*', '<', '>']
+
+# Dedicated RNG for the plotting palette. `get_palette` used to shuffle with the *global*
+# `random` module, so every plot silently advanced the same stream that `set_seeds` seeds and
+# that the strategies draw from — meaning a run with `-diag` and one without diverged in their
+# random unlabelled sub-sample and were no longer comparable. Keep plotting off the experiment's
+# RNG entirely.
+_PALETTE_RNG = random.Random(0)
+
+
+def _is_random_method(strategy_name: str) -> bool:
+    """Return True when `strategy_name` refers to the Random baseline.
+
+    Strategy names are `<backbone>_<method>` (e.g. ``ResNet18_Random``). The previous test was
+    ``strategy_name.split('_')[1] in 'Random'``, which is a *substring* test — it also matched
+    tokens such as 'an', 'do' or '' — and raised IndexError on any name without an underscore.
+
+    Args:
+        strategy_name: The strategy name as written in the results CSV.
+
+    Returns:
+        bool: True only if the method part of the name is exactly 'Random'.
+    """
+    parts = strategy_name.split('_')
+    return len(parts) > 1 and parts[1] == 'Random'
+
 
 def accuracy_score(outputs: torch.Tensor, labels: torch.Tensor) -> float:
     """
@@ -98,36 +126,42 @@ def plot_trail_acc(
         ValueError: If save_plot is True but plot_png_name is None.
     """
     
+    if save_plot and plot_png_name is None:
+        raise ValueError('plot_png_name is required when save_plot is True')
+
     if key == 'test_map': measure = 'mAP'
     else: measure = 'Accuracy'
-    
-    plt.figure(figsize = (14,10))
-    
-    shapes = ['o', 's', '^', 'D', 'v', 'o', 's', '^', 'D', 'v', 'o', 's', '^', 'D', 'v', 'o', 's', '^', 'D', 'v']
-    palette = get_palette(len(methods_results.items()))
+
+    fig = plt.figure(figsize = (14,10))
+
+    palette = get_palette(len(methods_results))
     lines_handles = []
-    
+
     # Plot each method
     for idx, (method_str, values) in enumerate(methods_results.items()):
+        color, marker = palette[idx % len(palette)], MARKERS[idx % len(MARKERS)]
         plt.plot(
-            n_lab_obs, 
-            values[key], 
+            n_lab_obs,
+            values[key],
             label = f'{method_str}',
-            linestyle = 'dashed' if method_str.split('_')[1] in 'Random' else 'solid', 
-            color=palette[idx]
+            linestyle = 'dashed' if _is_random_method(method_str) else 'solid',
+            color=color
         )
-        plt.scatter(n_lab_obs, values[key], marker=shapes[idx], color=palette[idx], zorder=5)
-        lines_handles.append(mlines.Line2D([], [], color=palette[idx], marker=shapes[idx], markersize=5, label=method_str))
-  
+        plt.scatter(n_lab_obs, values[key], marker=marker, color=color, zorder=5)
+        lines_handles.append(mlines.Line2D([], [], color=color, marker=marker, markersize=5, label=method_str))
+
     plt.title(f'{dataset_name} - Trial {trial} - {measure} labelled Obs', fontsize = 30)
     plt.xlabel('# labelled Obs', fontsize = 15)
     plt.ylabel(measure, fontsize = 15)
     plt.grid(True)
     plt.legend(handles=lines_handles)
-    
+
     if save_plot: plt.savefig(f'results/{exp_path}/{plot_png_name}')
     else: plt.show()
-    
+    # figures are never reused: without this every AL iteration leaks one, and matplotlib starts
+    # warning past 20 open figures.
+    plt.close(fig)
+
     
     
 def save_train_val_curves(
@@ -165,8 +199,8 @@ def save_train_val_curves(
 
     epochs = range(1, len(results_info[list_dict_keys[0]]) + 1)
 
-    _, ax = plt.subplots(nrows = 2, ncols = 2, figsize = (28,18))
-        
+    fig, ax = plt.subplots(nrows = 2, ncols = 2, figsize = (28,18))
+
     data = zip([(0,0), (0,1), (1,0), (1,1)], list_dict_keys)
     
     # plot each train/val curve in its respective subplot
@@ -181,6 +215,7 @@ def save_train_val_curves(
     # save the plot in the respective strategy folder
     plt.suptitle(f'Iteration: {al_iter} - {strategy_name}', fontsize = 30)
     plt.savefig(f'results/{exp_path}/{dataset_name}/{cicle_iter}/{strategy_name}/train_val_plots/{al_iter}.png')
+    plt.close(fig)
 
 
 
@@ -220,18 +255,18 @@ def plot_cumulative_train_results(
         KeyError: If any key in list_dict_keys is not present in the results dictionaries.
         ValueError: If list_dict_keys does not contain exactly 4 elements.
     """
-    _, ax = plt.subplots(nrows = 2, ncols = 2, figsize = (28,18))
-        
+    fig, ax = plt.subplots(nrows = 2, ncols = 2, figsize = (28,18))
+
     data = zip([(0,0), (0,1), (1,0), (1,1)], list_dict_keys)
     x = range(1, epochs + 1)
-    
-    palette = get_palette(len(cum_train_results.items()))
-    
+
+    palette = get_palette(len(cum_train_results))
+
     # plot each train/val curve in its respective subplot
     for (pos1, pos2), train_mes in data:
         for idx, (iter, results_info) in enumerate(cum_train_results.items()):
-            ax[pos1][pos2].plot(x, results_info[train_mes], label = f'{train_mes}_{iter}', color=palette[idx])
-                        
+            ax[pos1][pos2].plot(x, results_info[train_mes], label = f'{train_mes}_{iter}', color=palette[idx % len(palette)])
+
         ax[pos1][pos2].set_title(f'{train_mes} - Epochs', fontsize = 15)
         ax[pos1][pos2].set_xlabel('Epochs', fontsize = 10)
         ax[pos1][pos2].set_ylabel(train_mes, fontsize = 10)
@@ -241,6 +276,7 @@ def plot_cumulative_train_results(
     # save the plot in the respective strategy folder
     plt.suptitle(f'Cumulative Train Results - {strategy_name}', fontsize = 30)
     plt.savefig(f'results/{exp_path}/{dataset_name}/{cicle_iter}/{strategy_name}/train_val_plots/cumulative_train_results.png')
+    plt.close(fig)
 
 
 
@@ -280,14 +316,15 @@ def plot_entropy_iterations_classes(
         count = count / count.sum()
         entropy_val_to_plots.append(entropy(count, dim=0).item())
     
-    plt.figure(figsize = (14,10))
-    plt.plot(entropy_val_to_plots)
+    fig = plt.figure(figsize = (14,10))
+    # x is the number of labelled observations at each iteration, not the iteration index
+    plt.plot(list(count_classes.keys()), entropy_val_to_plots)
     plt.xlabel('Labelled Observations', fontsize=15)
     plt.ylabel('Entropy', fontsize=15)
     plt.title('Class Counts Entropy through Iteration', fontsize=30)
-    plt.legend()
     plt.grid(True)
     plt.savefig(f'results/{exp_path}/{dataset_name}/{cicle_iter}/{strategy_name}/entropy_class_iterations.png')
+    plt.close(fig)
 
 
 
@@ -319,7 +356,7 @@ def plot_classes_count_iterations(
         None. The function saves the plot directly to a file.
     """
 
-    plt.figure(figsize=(14, 10))
+    fig = plt.figure(figsize=(14, 10))
     iters = list(count_classes.keys())
     for label_id in range(len(class_labels)):
         plt.plot(
@@ -330,9 +367,10 @@ def plot_classes_count_iterations(
     plt.xlabel('Labelled Observations', fontsize=15)
     plt.ylabel('Number of Class Observations', fontsize=15)
     plt.title('Class Observations Count by Iteration', fontsize=30)
-    plt.legend()
+    if len(class_labels) <= 10: plt.legend()
     plt.grid(True)
     plt.savefig(f'results/{exp_path}/{dataset_name}/{cicle_iter}/{strategy_name}/classes_count_iterations.png')
+    plt.close(fig)
 
 
 
@@ -362,19 +400,19 @@ def write_csv(
         OSError: If there is an issue creating or writing to the file.
     """
     res_path = os.path.join('results', exp_path, dataset_name, filename)
-    
-    if (not os.path.exists(res_path)):
-        
-        with open(res_path, 'w', encoding='UTF8') as f:
-            writer = csv.writer(f)
-            writer.writerow(head)
-            f.close()
-    
-    with open(res_path, 'a', encoding='UTF8') as f:
-        writer = csv.writer(f)
-        writer.writerow(values)
-        f.close()
-            
+    create_directory(os.path.dirname(res_path))
+
+    # `newline=''` is required by the csv module: without it every row is followed by a blank
+    # line on platforms whose line terminator is \r\n, which pandas then reads back as NaN rows.
+    # An existing-but-empty file (a process killed between create and write) still needs a header.
+    if not os.path.exists(res_path) or os.path.getsize(res_path) == 0:
+        with open(res_path, 'w', encoding='UTF8', newline='') as f:
+            csv.writer(f).writerow(head)
+
+    with open(res_path, 'a', encoding='UTF8', newline='') as f:
+        csv.writer(f).writerow(values)
+
+
 
 
 def create_directory(dir: str) -> None: 
@@ -437,7 +475,18 @@ def create_method_res_dir(path: str) -> None:
 
 
 def create_class_dir(base_path: str, iter: int, classes: List[str]) -> None:
-    for cls in classes: create_directory(f'{base_path}/new_labelled_images/{iter}/{cls}')
+    """Create one directory per class to hold the images labelled at a given iteration.
+
+    Args:
+        base_path: The strategy results directory.
+        iter: The active learning iteration the images belong to.
+        classes: The class names of the dataset.
+
+    Returns:
+        None
+    """
+    for cls in classes:
+        create_directory(os.path.join(base_path, 'new_labelled_images', str(iter), str(cls)))
 
 
     
@@ -458,12 +507,15 @@ def get_palette(n_classes: int) -> List[ColorType]:
             - CSS4_COLORS if 10 < n_classes <= 100
             - XKCD_COLORS if n_classes > 100
 
+    Note:
+        The shuffle uses a private RNG (`_PALETTE_RNG`), never the global `random` stream that
+        `set_seeds` initialises: drawing colours must not perturb the experiment's randomness.
     """
 
     if n_classes <= 10: palette = list(mcolors.TABLEAU_COLORS.values())
     elif n_classes <= 100: palette = list(mcolors.CSS4_COLORS.values())
     else: palette = list(mcolors.XKCD_COLORS.values())
-    random.shuffle(palette)
+    _PALETTE_RNG.shuffle(palette)
     return palette
     
     
@@ -507,64 +559,71 @@ def plot_gtg_entropy_tensor(
     """
     
     create_directory(f'{path}/gtg_entropies_plots/{dir}')
-    
-    _, axes = plt.subplots(nrows=1, ncols=2, figsize=(20, 10))
-    
-    x = np.arange(max_x)
-    array = tensor.cpu().numpy()
-    
-    new_labelled = array[topk]
+
+    fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(20, 10))
+
+    entropies = tensor.detach().cpu().numpy()
+
+    # The x axis follows the tensor's actual width: GTG may converge before `gtg_max_iter`, and
+    # `np.arange(max_x)` would then be longer than the data and make every plot() raise.
+    x = np.arange(entropies.shape[1])
+    if entropies.shape[1] != max_x:
+        logger.warning(f'entropy tensor has {entropies.shape[1]} GTG iterations, expected {max_x}')
+
+    new_labelled = entropies[topk]
     new_labelled_lab = [lab_unlabels[k] for k in topk]
-    
-    mask = np.ones(array.shape[0], dtype=bool)
+
+    mask = np.ones(entropies.shape[0], dtype=bool)
     mask[topk] = False
-    unlabelled = array[mask]
+    unlabelled = entropies[mask]
 
     title = 'Entropy History' if dir == 'history' else 'Entropy Derivatives'
 
     palette = get_palette(len(classes))
-        
-    pl_cls_1, pl2_cls_2 = set(), set()
+    show_legend = len(classes) <= 10
 
-    for i, lab in zip(range(len(array)), lab_unlabels):
-        if lab not in pl_cls_1 and len(classes) <= 10 :
-            axes[0].plot(x, array[i], linestyle="-", label=classes[lab], color=palette[lab])
-            pl_cls_1.add(lab)
+    seen_left, seen_right = set(), set()
+
+    for i, lab in zip(range(len(entropies)), lab_unlabels):
+        color = palette[lab % len(palette)]
+        if show_legend and lab not in seen_left:
+            axes[0].plot(x, entropies[i], linestyle="-", label=classes[lab], color=color)
+            seen_left.add(lab)
         else:
-            axes[0].plot(x, array[i], linestyle="-", color=palette[lab])
-    
+            axes[0].plot(x, entropies[i], linestyle="-", color=color)
+
     axes[0].set_title(f'{title} - Classes', fontsize = 25)
     axes[0].set_ylabel('Entropy', fontsize = 20)
     axes[0].set_xlabel('GTG Iterations', fontsize = 20)
     axes[0].grid()
-    axes[0].legend()
-    
-    
-    for array, color, style, label in [(unlabelled, 'lightblue', '--', 'unlabelled'),
-                                       (new_labelled, None, '-', new_labelled_lab)]:
-        
-        labels_array = None
-        if style == '-': labels_array = label
-        
-        for i in range(len(array)):
-            
-            if style == '-' and labels_array is not None:
-                color = palette[labels_array[i]]
-                label = classes[labels_array[i]]
-                        
-            if label not in pl2_cls_2 and len(classes) <= 10:
-                axes[1].plot(x, array[i], linestyle=style, label=label, color=color)
-                pl2_cls_2.add(label)
-            else: axes[1].plot(x, array[i], linestyle=style, color=color)
-        
+    if show_legend: axes[0].legend()
+
+
+    for curves, base_color, style, curve_labels in [(unlabelled, 'lightblue', '--', None),
+                                                    (new_labelled, None, '-', new_labelled_lab)]:
+
+        for i in range(len(curves)):
+
+            if curve_labels is not None:
+                color = palette[curve_labels[i] % len(palette)]
+                label = classes[curve_labels[i]]
+            else:
+                color, label = base_color, 'unlabelled'
+
+            if show_legend and label not in seen_right:
+                axes[1].plot(x, curves[i], linestyle=style, label=label, color=color)
+                seen_right.add(label)
+            else: axes[1].plot(x, curves[i], linestyle=style, color=color)
+
     axes[1].set_ylabel('Entropy', fontsize = 20)
     axes[1].set_xlabel('GTG Iterations', fontsize = 20)
     axes[1].set_title(f'{title} - New_Lab / Unlab', fontsize = 25)
     axes[1].grid()
-    axes[1].legend()
-    
-    plt.suptitle(f'Entropy History - Iteration {iter}', fontsize = 30)
+    if show_legend: axes[1].legend()
+
+    plt.suptitle(f'{title} - Iteration {iter}', fontsize = 30)
     plt.savefig(f'{path}/gtg_entropies_plots/{dir}/{iter}.png')
+    plt.close(fig)
     
 
 
@@ -593,18 +652,25 @@ def plot_res_std_mean(
     """
     df = pd.read_csv(f'results/{exp_path}/{dataset_name}/results.csv')
 
+    # The metric column is whatever `train_evaluate_save` wrote after 'lab_obs' (test_accuracy for
+    # classification, test_map for other tasks) — hard-coding 'test_accuracy' raised a KeyError at
+    # the very end of a sweep on any task that does not report it.
+    metric = 'test_accuracy' if 'test_accuracy' in df.columns else df.columns[3]
+
     df_grouped = (
-        df[['method', 'lab_obs', 'test_accuracy']
+        df[['method', 'lab_obs', metric]
         ].groupby(['method', 'lab_obs']).agg(['mean', 'std', 'count'])
     )
     df_grouped = df_grouped.droplevel(axis=1, level=0).reset_index()
-    
+
+    # With a single trial pandas' std is NaN; the CI is then NaN, the band silently disappears and
+    # the saved CSV carries NaNs into the paper pipeline. A single sample has zero-width CI.
+    df_grouped["std"] = df_grouped["std"].fillna(0.)
     df_grouped["ci"] = 1.96 * df_grouped["std"] / np.sqrt(df_grouped["count"])
     df_grouped["ci_lower"] = df_grouped["mean"] - df_grouped["ci"]
     df_grouped["ci_upper"] = df_grouped["mean"] + df_grouped["ci"]
-    
+
     methods = df_grouped["method"].unique()
-    shapes = ['o', 's', '^', 'D', 'v', 'o', 's', '^', 'D', 'v', 'o', 's', '^', 'D', 'v', 'o', 's', '^', 'D', 'v']
 
     df_grouped = df_grouped.drop(columns=["ci"])
     df_grouped.to_csv(f'results/{exp_path}/{dataset_name}/mean_std_clf_results.csv', index=False)
@@ -613,23 +679,25 @@ def plot_res_std_mean(
     palette = get_palette(len(methods))
 
     # Plot each method
-    plt.figure(figsize=(14, 10))
+    fig = plt.figure(figsize=(14, 10))
     for idx, method in enumerate(methods):
-        method_data = df_grouped[df_grouped["method"] == method]
-        plt.plot(method_data["lab_obs"], method_data["mean"], label=method, 
-                 linestyle = 'dashed' if method.split('_')[1] in 'Random' else 'solid', color=palette[idx])
-        plt.fill_between(method_data["lab_obs"], method_data["ci_lower"], method_data["ci_upper"], alpha=0.3, color=palette[idx])
-        plt.scatter(method_data["lab_obs"], method_data["mean"], marker=shapes[idx], color=palette[idx], zorder=5)
-        lines_handles.append(mlines.Line2D([], [], color=palette[idx], marker=shapes[idx], markersize=5, label=method))
-        
+        color, marker = palette[idx % len(palette)], MARKERS[idx % len(MARKERS)]
+        method_data = df_grouped[df_grouped["method"] == method].sort_values("lab_obs")
+        plt.plot(method_data["lab_obs"], method_data["mean"], label=method,
+                 linestyle = 'dashed' if _is_random_method(method) else 'solid', color=color)
+        plt.fill_between(method_data["lab_obs"], method_data["ci_lower"], method_data["ci_upper"], alpha=0.3, color=color)
+        plt.scatter(method_data["lab_obs"], method_data["mean"], marker=marker, color=color, zorder=5)
+        lines_handles.append(mlines.Line2D([], [], color=color, marker=marker, markersize=5, label=method))
+
 
     plt.xlabel('labelled Observations', fontsize = 15)
-    plt.ylabel('Test Accuracy', fontsize = 15)
+    plt.ylabel(metric.replace('test_', 'Test ').title(), fontsize = 15)
     plt.title(f'{dataset_name} results', fontsize = 30)
     plt.legend(handles=lines_handles)
     plt.grid(True)
-    
-    plt.savefig(f'results/{exp_path}/{dataset_name}/mean_std_results.png') 
+
+    plt.savefig(f'results/{exp_path}/{dataset_name}/mean_std_results.png')
+    plt.close(fig)
     
 
 
@@ -702,22 +770,24 @@ def plot_tsne_A(
     """
     
     A_1, A_2 = A
-    
+
     len_lab = len(labels[0])
-    
-    tsne_A1 = TSNE().fit_transform(A_1.numpy())
-    tsne_A2 = TSNE().fit_transform(A_2.numpy())
-    
-    _, axes = plt.subplots(nrows=2, ncols=2, figsize=(23, 18))
-        
+
+    # detach/cpu: A may still carry a graph or live on the accelerator depending on the caller.
+    tsne_A1 = TSNE().fit_transform(A_1.detach().cpu().numpy())
+    tsne_A2 = TSNE().fit_transform(A_2.detach().cpu().numpy())
+
+    fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(23, 18))
+
+    label = np.hstack([l.detach().cpu().numpy() for l in labels]).astype(int)
+
     for idx, (tsne, name) in enumerate(zip([tsne_A1, tsne_A2], ['Original', f'{strategy} Sparsification'])):
-        
+
         tsne_lab, tsne_unlab = tsne[:len_lab,:], tsne[len_lab:,:]
         x_lab, y_lab = tsne_lab[:,0], tsne_lab[:,1]
         x_unlab, y_unlab = tsne_unlab[:,0], tsne_unlab[:,1]
         x, y = np.hstack((x_lab, x_unlab)), np.hstack((y_lab, y_unlab))
-        label = np.hstack(labels)
-        
+
         sns.scatterplot(x=x_unlab, y=y_unlab, label='unlabelled', color='blue', s=17, ax=axes[idx][0])
         sns.scatterplot(x=x_lab, y=y_lab, label='labelled', color='orange', s=17, ax=axes[idx][0])
         axes[idx][0].set_title(f'{name} Affinity Matrix', fontsize = 20)
@@ -729,9 +799,10 @@ def plot_tsne_A(
         if len(classes) > 10: sns_p.legend([],[], frameon=False)
 
     plt.suptitle(f'Affinity Matrix TSNE Plots - Iteration {iter}', fontsize=30)
-    
+
     create_directory(f'results/{exp_path}/{ds_name}/{samp_iter}/{method}/tsne_plots/{affinity}_matrix')
     plt.savefig(f'results/{exp_path}/{ds_name}/{samp_iter}/{method}/tsne_plots/{affinity}_matrix/{iter}.png')
+    plt.close(fig)
     
     
     
@@ -748,7 +819,7 @@ def plot_new_labelled_tsne(
         exp_path: str, 
         samp_iter: int, 
         d_labels: Dict[str, int],
-        gtg_result_prediction=None
+        gtg_result_prediction=None 
     ) -> None:
     """
     Generate t-SNE visualization plots for labelled, unlabelled, and new labelled data.
@@ -786,18 +857,24 @@ def plot_new_labelled_tsne(
         TypeError: If input arguments are of incorrect types.
     """
     
-    tsne = TSNE(n_jobs=1).fit_transform(np.vstack((lab["embedds"].numpy(), unlab["embedds"].numpy())))
-    tsne_lab, tsne_unlab = tsne[:len(lab["embedds"]), :], tsne[len(lab["embedds"]):, :]
-    
+    lab_embedds = lab["embedds"].detach().cpu().numpy()
+    unlab_embedds = unlab["embedds"].detach().cpu().numpy()
+
+    tsne = TSNE(n_jobs=1).fit_transform(np.vstack((lab_embedds, unlab_embedds)))
+    tsne_lab, tsne_unlab = tsne[:len(lab_embedds), :], tsne[len(lab_embedds):, :]
+
     x_lab, y_lab = tsne_lab[:, 0], tsne_lab[:, 1]
     x_unlab, y_unlab = tsne_unlab[:, 0], tsne_unlab[:, 1]
-    
+
     fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(25, 14))
-    
-    if isinstance(gtg_result_prediction, np.ndarray):
-        
-        idxs_unlab_again = [id for id in range(len(gtg_result_prediction)) if id not in idxs_new_labels]
-        
+
+    if gtg_result_prediction is not None and isinstance(gtg_result_prediction, np.ndarray):
+
+        # set lookup: `id not in idxs_new_labels` on a list is O(n*k), i.e. ~10^7 comparisons
+        # for a 10k pool and a 1k budget, on every single AL iteration.
+        new_labels_set = set(int(i) for i in idxs_new_labels)
+        idxs_unlab_again = [id for id in range(len(gtg_result_prediction)) if id not in new_labels_set]
+
         true_unlab = np.array(gtg_result_prediction[idxs_unlab_again]) == 1
         false_unlab = np.array(gtg_result_prediction[idxs_unlab_again]) == 0
         true_new_lab = np.array(gtg_result_prediction[idxs_new_labels]) == 1
@@ -830,18 +907,22 @@ def plot_new_labelled_tsne(
     unique_labels = dict(zip(labels, handles))
     axes[0].legend(unique_labels.values(), unique_labels.keys(), markerscale=1)
     
-    sns_p = sns.scatterplot(x=np.hstack((x_lab, x_unlab)), y=np.hstack((y_lab, y_unlab)), 
-                            hue=[classes[l] for l in np.hstack((lab["labels"], unlab["labels"]))], s=20, ax=axes[1])
-        
+    all_labels = np.hstack((lab["labels"].detach().cpu().numpy(),
+                            unlab["labels"].detach().cpu().numpy())).astype(int)
+
+    sns_p = sns.scatterplot(x=np.hstack((x_lab, x_unlab)), y=np.hstack((y_lab, y_unlab)),
+                            hue=[classes[l] for l in all_labels], s=20, ax=axes[1])
+
     axes[1].set_title('TSNE - Classes', fontsize=15)
-    
-    if len(classes) <= 10: 
+
+    if len(classes) <= 10:
         fig.text(0.5, 0.05, f'New Labelled Observations: {d_labels}', ha='center', va='center', fontdict={'size': 17})
-    else: 
+    else:
         sns_p.legend([], [], frameon=False)
-    
+
     plt.suptitle(f'TSNE Plot - Iteration {iter}', fontsize=30)
     plt.savefig(f'results/{exp_path}/{ds_name}/{samp_iter}/{method}/tsne_plots/{iter}.png')
+    plt.close(fig)
 
     
     
@@ -871,15 +952,18 @@ def count_class_observation(
         KeyError: If a label index is out of range of the classes list.
     """
      
-    if topk_idx_obs == None: 
+    # `topk_idx_obs == None` is an elementwise comparison for arrays/tensors and raises
+    # "truth value of an array is ambiguous"; identity is what is meant here.
+    if topk_idx_obs is None:
         if len(dataset[0]) == 3: labels = [lab for _, _ ,lab in dataset]
         else: labels = [lab for _, _ ,lab, _ in dataset] #-> for TiDAL
-    else: labels = [dataset[k][2] for k in topk_idx_obs]
-    
-    d_labels = {}
-    for cls in classes: d_labels[cls] = 0
-    keys_d_labels = list(d_labels.keys())
-    for l in labels: d_labels[keys_d_labels[l]] += 1
+    else: labels = [dataset[int(k)][2] for k in topk_idx_obs]
+
+    d_labels = {cls: 0 for cls in classes}
+    for l in labels:
+        # index `classes` directly rather than relying on the dict preserving insertion order
+        log_assert(0 <= int(l) < len(classes), f'label {int(l)} is outside the {len(classes)} classes')
+        d_labels[classes[int(l)]] += 1
     return d_labels
 
         
@@ -983,10 +1067,12 @@ def get_device(n_gpus: int) -> torch.device:
         logger.info(f"Using {n_gpus} / {torch.cuda.device_count()} of the available GPUs")
         device = torch.device("cuda")
 
+        # is_nccl_available() is only defined when the distributed package itself is available;
+        # calling it unconditionally raises on builds compiled without distributed support.
         if dist.is_available():
             logger.info("Distributed package is available")
-        if dist.is_nccl_available():
-            logger.info("NCCL backend available")
+            if dist.is_nccl_available():
+                logger.info("NCCL backend available")
 
     elif torch.backends.mps.is_available():
         logger.info("CUDA is not available. Using MPS (macOS)")

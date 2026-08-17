@@ -74,11 +74,11 @@ class VAE(nn.Module):
 
     def reparameterize(self, mu, logvar):
         stds = (0.5 * logvar).exp()
-        epsilon = torch.randn(*mu.size())
-        if mu.is_cuda:
-            stds, epsilon = stds.cuda(), epsilon.cuda()
-        latents = epsilon * stds + mu
-        return latents
+        # randn_like keeps the noise on mu's device. The previous `torch.randn(...)` always
+        # allocated on CPU and was only moved when `mu.is_cuda`, so on any non-CUDA accelerator
+        # (MPS) this raised "Expected all tensors to be on the same device".
+        epsilon = torch.randn_like(mu)
+        return epsilon * stds + mu
 
     def _encode(self, x):
         return self.encoder(x)

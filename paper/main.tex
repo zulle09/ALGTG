@@ -14,15 +14,15 @@
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 \usepackage[margin=1in]{geometry}
-\usepackage{times}
+% lmodern rather than `times`: it ships complete T1 metrics, so the source also compiles on a
+% minimal TeX installation (BasicTeX), where Times pulls in Courier metrics that are absent.
+\usepackage{lmodern}
 \usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{amsthm}
 \newtheorem{proposition}{Proposition}
 \usepackage{graphicx}
 \usepackage{booktabs}
-\usepackage{algorithm}
-\usepackage{algorithmic}
 \usepackage{caption}
 \usepackage[round]{natbib}          % author-year citations via \citep / \citet
 \usepackage{url}
@@ -63,15 +63,57 @@ Tiny-ImageNet, ALGTG %% TODO: headline result vs. strongest baseline.
 
 % ---------------------------------------------------------------------------
 \section{Introduction}
-%% TODO — expand. Suggested arc:
-%% (1) DL needs labels; annotation is costly; AL matters.
-%% (2) Existing AL scores are largely *static*: a single uncertainty or diversity
-%%     value per sample from a frozen model. They ignore how a label assignment
-%%     *behaves* under transductive propagation across the data manifold.
-%% (3) Insight: run the Graph Transduction Game and watch each unlabelled sample's
-%%     entropy evolve; the dynamics encode both uncertainty and (via the payoff)
-%%     redundancy w.r.t. already-labelled points.
-%% (4) Contributions:
+
+Modern deep networks owe much of their success to large annotated corpora, but
+annotation is the one ingredient that does not become cheaper with scale. In
+specialised domains---medical imaging, remote sensing, speech---labels require
+expert time, and the marginal value of an additional label varies enormously from
+sample to sample. Active learning (AL) addresses exactly this asymmetry: given a
+fixed annotation budget, choose the samples whose labels will improve the model the
+most \citep{settles2009active}.
+
+Most deep AL methods answer that question with a \emph{static} score. Uncertainty
+methods read a scalar off the current model---predictive entropy, margin, or the
+mutual information between prediction and parameters
+\citep{houlsby2011bayesian,gal2017deep}. Diversity methods ignore the model's confidence and instead cover the
+representation geometrically \citep{sener2018active}. Hybrids combine the two cues in
+a single embedding or objective \citep{ash2020deep,parvaneh2022active}, and a further
+line trains an auxiliary head to predict the signal
+\citep{yoo2019learning,kim2021task,kye2023tidal}. What these approaches share is that
+the score is a snapshot: it is computed from a frozen model at one instant, and it
+says nothing about how a hypothetical label assignment would \emph{behave} once it
+had to be reconciled with the labels of every other sample.
+
+Transductive learning offers precisely that missing view. In the Graph Transduction
+Game (GTG) of \citet{erdem2012graph}, labelling is cast as a non-cooperative game:
+samples are players, labels are strategies, and a payoff rewards agreeing with
+similar players. The replicator dynamics---a continuous generalisation of relaxation
+labelling \citep{pelillo1997dynamics}---propagate the labelled seeds through the data
+and settle at a Nash equilibrium, a labelling consistent with both the supervision and
+the manifold structure. Existing work uses the \emph{outcome} of this process: the
+equilibrium labelling. Our starting point is that the \emph{process itself} is
+informative, and that for active learning it is in fact the more useful object.
+
+The reason is intuitive. A sample lying deep inside a region the labelled set already
+explains receives a strong, coherent pull toward one label and commits after a couple
+of iterations. A sample on a decision boundary receives conflicting pulls and stays
+ambivalent; a sample in a region no label reaches receives almost no pull at all and
+remains undecided. Tracking each sample's label entropy \emph{across} the iterations
+therefore yields a single quantity in which uncertainty and redundancy are already
+entangled the way an acquisition function needs them to be---without hand-combining
+two heuristics through a trade-off hyperparameter. This is the signal ALGTG queries on.
+
+Making this precise required understanding which parts of the game actually matter.
+Because labelled players are clamped to their known labels, we show
+(Proposition~\ref{prop:inert}) that entire blocks of the payoff matrix cannot
+influence the outcome: the natural-looking idea of making already-annotated samples
+``repel'' each other, so as to discourage redundant queries, provably does nothing. The
+redundancy avoidance that such a term is meant to produce is instead an
+\emph{emergent} property of the dynamics, and we give a one-parameter term that
+modulates it where it is genuinely effective. Finally, since the whole procedure is
+differentiable, we derive an end-to-end variant in which the acquisition signal is
+learned jointly with the backbone, letting representation and selection co-adapt.
+%% TODO: closing sentence with the empirical headline once results are in.
 
 \noindent\textbf{Contributions.}
 \begin{itemize}
@@ -234,22 +276,28 @@ little new information, whereas a point that stays uncertain or oscillates under
 propagation lies where the current model and manifold structure disagree---exactly
 where a label is most useful.
 
-\begin{algorithm}[t]
-\caption{ALGTG acquisition (offline)}
+% Typeset without the algorithm/algorithmic packages so the source compiles on a minimal
+% TeX installation (e.g. BasicTeX) as well as on a full TeX Live.
+\begin{figure}[t]
+\hrule\vspace{3pt}
+\noindent\textbf{Algorithm 1}\quad ALGTG acquisition (offline)
+\vspace{3pt}\hrule\vspace{5pt}
+\begin{tabbing}
+\hspace{1.6em}\=\hspace{1.4em}\=\kill
+\textbf{Require:} features $\phi(x)$ for $L\cup U$; budget $k$; iterations $T$; tolerance $\varepsilon$ \\[2pt]
+1: \> build the payoff $W$ (kernel, clamp to $[0,1]_{\ge0}$, zero diagonal, threshold) \\
+2: \> initialise $x^{(0)}$: one-hot for $i\in L$, uniform for $i\in U$ \\
+3: \> \textbf{for} $t=0,\dots,T-1$ \textbf{do} \\
+4: \> \> update $x^{(t+1)}$ by Eq.~\eqref{eq:replicator}; re-clamp the labelled rows \\
+5: \> \> record $H_i^{(t+1)}$ for $i\in U$ \\
+6: \> \> \textbf{if} $\lVert x^{(t+1)}-x^{(t)}\rVert<\varepsilon$ \textbf{then break} \\
+7: \> \textbf{end for} \\
+8: \> $s_i \leftarrow \mathrm{aggregate}\big(H_i^{(1:T)}\big)$ for $i\in U$ \\
+9: \> \textbf{return} the top-$k$ unlabelled samples ranked by $s_i$
+\end{tabbing}
+\vspace{-4pt}\hrule
 \label{alg:algtg}
-\begin{algorithmic}[1]
-\REQUIRE features $\phi(x)$ for $L\cup U$, budget $k$, iterations $T$, tol.\ $\varepsilon$
-\STATE build payoff $W$ (kernel, clamp, mixed distance, threshold)
-\STATE init $x^{(0)}$ (one-hot for $L$, uniform for $U$)
-\FOR{$t=0$ \TO $T-1$}
-  \STATE update $x^{(t+1)}$ by Eq.~\eqref{eq:replicator}; clamp labelled rows
-  \STATE record $H_i^{(t+1)}$ for $i\in U$
-  \STATE \textbf{if} $\lVert x^{(t+1)}-x^{(t)}\rVert<\varepsilon$ \textbf{then break}
-\ENDFOR
-\STATE $s_i \leftarrow \mathrm{aggregate}(H_i^{(1:T)})$ for $i\in U$
-\RETURN top-$k$ unlabelled samples by $s_i$
-\end{algorithmic}
-\end{algorithm}
+\end{figure}
 
 \paragraph{End-to-end differentiable variant.} The offline scheme runs GTG on
 frozen embeddings after training. We also propose an online variant in which a
@@ -266,36 +314,77 @@ transduction-derived target. %% TODO: state which variant is the final "ALGTG"
 % ---------------------------------------------------------------------------
 \section{Experiments}
 
-\paragraph{Setup.} %% TODO
-Backbone ResNet-18 \citep{he2016deep} (VGG-16-bn for Caltech-256). AL protocol:
-$1000$ initial labelled samples, $10$ cycles of $+1000$, a random unlabelled pool
-of $10{,}000$ per cycle, $200$ epochs per cycle, averaged over $5$ trials; we
-report mean and $95\%$ confidence intervals.
+\paragraph{Datasets.} We evaluate on five image-classification benchmarks spanning a range
+of label cardinalities and image statistics: CIFAR-10 and CIFAR-100 ($50$k train
+/ $10$k test, $32\times32$), SVHN ($73$k / $26$k, $32\times32$), Fashion-MNIST
+($60$k / $10$k, $28\times28$, greyscale) and Tiny-ImageNet ($100$k / $10$k, $64\times64$,
+$200$ classes).
+
+\paragraph{Protocol.} Every method starts from the same randomly drawn set of $1000$
+labelled samples and performs $10$ acquisition cycles of $1000$ labels each, ending at
+$11$k labels. At each cycle the candidate pool is a fresh random subset of $10{,}000$
+unlabelled samples, which bounds the cost of the pool-based methods (ours included) and is
+applied identically to every baseline. After each acquisition the network is
+\emph{re-initialised from the same checkpoint and retrained from scratch} for $200$ epochs,
+so that the reported accuracy reflects the acquired labels and not the optimisation history.
+Each configuration is repeated over $5$ trials with different seeds, which also re-draw the
+initial labelled set; we report the mean and a $95\%$ confidence interval.
+
+\paragraph{Implementation.} The backbone is ResNet-18 \citep{he2016deep} (VGG-16-bn for
+Caltech-256), trained with SGD (lr $0.1$, momentum $0.9$, weight decay $5\times10^{-4}$,
+step decay at epoch $160$) and batch size $128$. The learnable acquisition modules use Adam
+(lr $10^{-3}$). Unless stated otherwise ALGTG uses the correlation kernel, mean-thresholded
+sparsification, mean aggregation of the entropy trajectory, $T=30$ iterations, tolerance
+$\varepsilon=10^{-4}$ and $\lambda=0$.
+
+\paragraph{Metrics.} Alongside accuracy at each budget we report the area under the
+budget--accuracy curve (AUBC), normalised by the budget range, which summarises a method's
+behaviour over the whole annotation trajectory in a single number and avoids conclusions that
+hinge on one cherry-picked budget.
+
+\paragraph{Reproducibility.} All methods share the same backbone, optimiser, schedule, seeds
+and candidate pools, and differ only in the acquisition function, so the comparison isolates
+the selection strategy. Every baseline is re-implemented in the same framework rather than
+copied from published tables. We flag one consequence of this explicitly: while preparing the
+study we found defects in three of our own baseline implementations---MC-dropout that produced
+no stochasticity (so BALD's mutual information was identically zero), per-class anchoring that
+silently fell back to a global mean in AlphaMix, and BADGE clustering penultimate features
+instead of gradient embeddings---each of which had made the corresponding baseline weaker than
+it should be. All reported numbers were produced after these were fixed; no pre-fix result is
+included. Code, configurations and the scripts that turn the raw logs into the tables and
+figures of this paper are released with it.
 
 \paragraph{Baselines.} Random, Entropy, Core-Set \citep{sener2018active},
 BADGE \citep{ash2020deep}, BALD \citep{gal2017deep}, Learning Loss
 \citep{yoo2019learning}, VAAL/TA-VAAL \citep{sinha2019variational,kim2021task},
 CDAL \citep{agarwal2020contextual}, AlphaMix \citep{parvaneh2022active},
-TiDAL \citep{kye2023tidal}, and the graph-based Sequential GCN
-\citep{caramalau2021sequential}.
+TiDAL \citep{kye2023tidal}, and both variants of the graph-based Sequential GCN
+---UncertainGCN and CoreGCN---\citep{caramalau2021sequential}, which are the closest
+competitors to our setting.
 %% NOTE: BALD, AlphaMix and BADGE were re-run after correctness fixes; do not
 %% report any pre-fix numbers.
 
-%% TODO main results table
-\begin{table}[t]
-\centering
-\caption{Test accuracy (\%) vs.\ labelling budget. Mean over 5 trials. %% TODO}
-\label{tab:main}
-\begin{tabular}{lccc}
-\toprule
-Method & 2k & 5k & 10k \\
-\midrule
-Random        & -- & -- & -- \\
-\dots         & -- & -- & -- \\
-\textbf{ALGTG} (ours) & -- & -- & -- \\
-\bottomrule
-\end{tabular}
-\end{table}
+% Main results table. Generated from the benchmark CSV by
+%     python paper/make_results.py results/<exp_path> cifar10
+% which writes results_<dataset>.tex next to this file. Until that has been run the
+% placeholder below is used, so the document always compiles.
+\IfFileExists{results_cifar10.tex}{\input{results_cifar10}}{%
+  \begin{table}[t]
+  \centering
+  \caption{Test accuracy (\%) vs.\ labelling budget. \emph{Placeholder --- run
+  \texttt{paper/make\_results.py} to populate.}}
+  \label{tab:main-cifar10}
+  \begin{tabular}{lccc}
+  \toprule
+  Method & 2k & 5k & 10k \\
+  \midrule
+  Random                & -- & -- & -- \\
+  \dots                 & -- & -- & -- \\
+  \textbf{ALGTG} (ours) & -- & -- & -- \\
+  \bottomrule
+  \end{tabular}
+  \end{table}%
+}
 
 \paragraph{Ablations.} %% TODO — each isolates one design choice:
 (i) affinity kernel (cosine / correlation / RBF);
@@ -315,8 +404,31 @@ non-queried samples; t-SNE of selections vs.\ competitors; cost/runtime discussi
 
 % ---------------------------------------------------------------------------
 \section{Conclusion}
-%% TODO — recap contribution, headline result, and limitations (affinity/GTG
-%% cost scales with pool size; offline t-SNE diagnostics are expensive).
+
+We presented ALGTG, an active-learning acquisition function that scores unlabelled
+samples by the \emph{trajectory} of their label entropy under the replicator dynamics
+of a graph transduction game, rather than by a static readout of a frozen model. Along
+the way we characterised which parts of the game's payoff can influence the outcome at
+all (Proposition~\ref{prop:inert}), which shows that the avoidance of redundant queries
+is emergent rather than something to be engineered, and we gave a differentiable
+formulation that lets the acquisition signal shape the representation it is computed
+from. %% TODO: one sentence with the headline empirical result.
+
+\paragraph{Limitations.} Three are worth stating plainly. First, \emph{cost}: the payoff
+matrix is quadratic in the size of the candidate pool, so the offline variant becomes
+expensive as the labelled set grows, and the online variant unrolls the dynamics inside
+the autograd graph. Sub-sampling the pool, as we do, bounds this but makes the
+transduction depend on the sample drawn. Second, \emph{locality of the online variant}:
+it runs the game over a mini-batch rather than the full pool, so its equilibrium---and
+hence its signal---depends on batch composition; it is best understood as an auxiliary
+objective that shapes the backbone, in the spirit of \citet{yoo2019learning}, rather
+than as a cheaper substitute for the offline computation, whose teacher signal is
+available at query time anyway. Third, \emph{graph construction}: the acquisition
+inherits whatever the affinity kernel and its sparsification encode, and aggressive
+thresholding can disconnect points from the graph entirely, at which point the dynamics
+leave them untouched. We keep such nodes on the simplex by convention, but a principled
+treatment of disconnected candidates---which are often precisely the novel ones---is
+left to future work.
 
 % ---------------------------------------------------------------------------
 \bibliographystyle{plainnat}

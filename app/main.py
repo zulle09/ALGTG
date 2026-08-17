@@ -44,16 +44,31 @@ def get_args() -> argparse.Namespace:
     parser.add_argument('-mp', '--master_port', type=str, required=False, default='12355', help='Master port for distributed training')
     parser.add_argument('-m', '--methods', type=str, nargs='+', required=True, choices=[
             'random', 'entropy', 'coreset', 'badge', 'bald', 'cdal', 'tavaal', 'alphamix', 'tidal',
+            'uncertaingcn', 'coregcn',
             'll', 'gtg', 'll_gtg', 'llmlp_gtg', 'lsmlps_gtg', 'lsmlpsA_gtg', 'lstmreg_gtg', 'lstmbc_gtg'
         ], help='Possible methods to choose')
     parser.add_argument('-ds', '--datasets', type=str, nargs='+', required=True, choices=['cifar10', 'cifar100', 'svhn', 'fmnist', 'caltech256', 'tinyimagenet'],
                         help='Possible datasets to choose')
     parser.add_argument('-tr', '--trials', type=int, required=False, default=5, help='AL trials')
+    parser.add_argument('-o', '--exp_path', type=str, required=False, default=None,
+                        help='Output folder under results/ (default: current timestamp). Pass an '
+                             'existing one to accumulate several invocations into a single '
+                             'results.csv — this is what lets a sweep run one method per process '
+                             'and be resumed after a crash')
     parser.add_argument('-bbone', '--bbone_pre_train', required=False, action='store_true', help='BackBone pre-train for GTG Module')
     parser.add_argument('-cs_s', '--cold_start_strategy', type=str, required=False, choices=['none', 'mse', 'kmeans'], default='none', help='Cold start strategy')
     
    
     parser.add_argument('-tulp', '--temp_unlab_pool', required=False, action='store_true', help='Temporary Unlabelled Pool')
+    parser.add_argument('-nw', '--num_workers', type=int, required=False, default=4,
+                        help='DataLoader worker processes for the single-GPU path. 0 loads in the '
+                             'main process and leaves the GPU waiting on the CPU; set it to the '
+                             'number of available cores. Use 0 if workers misbehave in your container')
+    parser.add_argument('-diag', '--diagnostics', required=False, action='store_true',
+                        help='Enable the expensive analysis artefacts (t-SNE plots, affinity-matrix plots, '
+                             'entropy-history plots, per-sample labelled image dumps). OFF by default: they can '
+                             'dominate the wall-clock of a full benchmark run. Accuracy CSVs and train/val '
+                             'curves are always written')
     parser.add_argument('-am', '--affinity_matrix', type=str, nargs='+', required=False, choices=['corr', 'cos_sim', 'rbfk'], default=['corr'], help='Affinity matrix to choose')
     
     parser.add_argument('-am_md', '--affinity_matrix_mixed_distance', type=str, nargs='+', required=False, choices=['LL', 'UU', 'LU', 'UL'], default=['LL'], help='Affinity matrix portion to convert into distance measure')
@@ -142,7 +157,7 @@ def main() -> None:
     """
     args = get_args()
     
-    exp_path = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    exp_path = args.exp_path or datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     create_directory(dir=f'results/{exp_path}')
     
     logging.basicConfig(filename = f'results/{exp_path}/exp_log.log',
@@ -212,6 +227,7 @@ def main() -> None:
             'dataset_name': dataset_name, 'gpus': args.gpus, 
             'master_address': args.master_address, 'master_port': args.master_port,
             'temp_unlab_pool': args.temp_unlab_pool, 'bbone_pre_train': args.bbone_pre_train,
+            'diagnostics': args.diagnostics, 'num_workers': args.num_workers,
         }
         
         if args.cold_start_strategy == 'none' and args.bbone_pre_train: raise ValueError('You must specify a cold start strategy to pre-train the backbone')

@@ -54,10 +54,14 @@ class CoreSet(ActiveLearner):
 
         while len(overall_topk) < n_top_k_obs:
             idx = torch.argmax(min_dist)
-            overall_topk.append(idx.item())
+            overall_topk.append(int(idx.item()))
             dist_new_ctr = torch.cdist(self.unlab_embedds_dict["embedds"],
                                        self.unlab_embedds_dict["embedds"][idx].unsqueeze(0))
             min_dist = torch.min(min_dist, dist_new_ctr[:, 0])
+            # Explicitly retire the chosen point: with duplicate embeddings several points tie at
+            # distance 0 and argmax would hand back an index already in the batch, which later
+            # fails as "list.remove(x): x not in list" when the labelled set is updated.
+            min_dist[idx] = float('-inf')
 
         return overall_topk
 

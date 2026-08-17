@@ -67,9 +67,22 @@ class BADGE(ActiveLearner):
             Ddist = (D2 ** 2) / torch.sum(D2 ** 2)
             customDist = Categorical(Ddist)
             ind = customDist.sample()
+            # Rejection-sample an as-yet-unpicked centre, but bounded. Once many points have
+            # collapsed onto the chosen centres their D2 is exactly 0, so the k-means++
+            # distribution can carry no numerically representable mass on the unpicked points
+            # and this loop would never terminate (observed: 106/128 points at D2 == 0, mass on
+            # unpicked = -1e-07). Fall back to the deterministic limit of k-means++ — the
+            # unpicked point farthest from its nearest centre.
+            tries = 0
             while ind.item() in indsAll:
+                if tries >= 1000:
+                    masked = D2.clone()
+                    masked[torch.tensor(indsAll, dtype=torch.long, device=D2.device)] = -1.
+                    ind = torch.argmax(masked)
+                    break
                 ind = customDist.sample()
-            
+                tries += 1
+
             mu = torch.cat((mu, self.embedds_dict["embedds"][ind].unsqueeze(0)))
             
             indsAll.append(int(ind.item()))

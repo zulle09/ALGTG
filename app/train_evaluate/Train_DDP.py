@@ -184,7 +184,12 @@ def train(params: Dict[str, Any]) -> Tuple[List[float], List[float]]:
     batch_size = t_p[ct_p["dataset_name"]]["batch_size"][params["module_name_only"]]
     params["batch_size"] = batch_size
     
-    dict_dl = dict(batch_size=batch_size, pin_memory=True)
+    # num_workers=0 (the previous default) decodes and augments in the main process, so the GPU
+    # sits idle waiting on the CPU — on a rented instance that is paid-for idle time. Workers are
+    # only useful above 0, and persistent_workers requires them.
+    n_workers = int(ct_p.get("num_workers", 4))
+    dict_dl = dict(batch_size=batch_size, pin_memory=True, num_workers=n_workers)
+    if n_workers > 0: dict_dl["persistent_workers"] = True
     
     TrainWorker = Cls_TrainWorker
     

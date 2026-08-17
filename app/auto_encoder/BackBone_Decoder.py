@@ -1,7 +1,7 @@
 import torch.nn as nn
 
 from models.backbones.ResNet18 import ResNet18
-from auto_encoder.ResNet18_decoder import ResNet18_Decoder
+from auto_encoder.ResNet18_Decoder import ResNet18_Decoder
 
 class BackBone_Decoder(nn.Module):
     """
