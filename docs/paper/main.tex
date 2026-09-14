@@ -365,14 +365,14 @@ competitors to our setting.
 %% report any pre-fix numbers.
 
 % Main results table. Generated from the benchmark CSV by
-%     python paper/make_results.py results/<exp_path> cifar10
+%     python docs/paper/make_results.py results/<exp_path> cifar10
 % which writes results_<dataset>.tex next to this file. Until that has been run the
 % placeholder below is used, so the document always compiles.
 \IfFileExists{results_cifar10.tex}{\input{results_cifar10}}{%
   \begin{table}[t]
   \centering
   \caption{Test accuracy (\%) vs.\ labelling budget. \emph{Placeholder --- run
-  \texttt{paper/make\_results.py} to populate.}}
+  \texttt{docs/paper/make\_results.py} to populate.}}
   \label{tab:main-cifar10}
   \begin{tabular}{lccc}
   \toprule

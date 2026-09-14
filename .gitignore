@@ -8,15 +8,15 @@
 git_key.md
 
 # LaTeX build artefacts
-paper/*.aux
-paper/*.bbl
-paper/*.blg
-paper/*.log
-paper/*.out
-paper/*.fls
-paper/*.fdb_latexmk
-paper/*.synctex.gz
-paper/main.pdf
-paper/results_*.tex
-paper/curve_*.pdf
-paper/summary_*.txt
+docs/paper/*.aux
+docs/paper/*.bbl
+docs/paper/*.blg
+docs/paper/*.log
+docs/paper/*.out
+docs/paper/*.fls
+docs/paper/*.fdb_latexmk
+docs/paper/*.synctex.gz
+docs/paper/main.pdf
+docs/paper/results_*.tex
+docs/paper/curve_*.pdf
+docs/paper/summary_*.txt

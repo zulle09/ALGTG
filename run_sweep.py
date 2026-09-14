@@ -98,7 +98,7 @@ def main() -> None:
     if failed:
         print(f"failed: {', '.join(failed)}")
         print("inspect the logs, fix, then re-run the same command — finished methods are skipped")
-    print(f"\nnext:  python paper/make_results.py results/{a.exp_path} {a.dataset}")
+    print(f"\nnext:  python docs/paper/make_results.py results/{a.exp_path} {a.dataset}")
     sys.exit(1 if failed else 0)
 
 

@@ -9,8 +9,8 @@ and emits, into this folder:
     summary_<dataset>.txt   - AUBC ranking, for the prose
 
 Usage:
-    python paper/make_results.py results/2026-07-14_10-00-00 cifar10
-    python paper/make_results.py results/<exp> cifar10 --budgets 2000 5000 10000
+    python docs/paper/make_results.py results/2026-07-14_10-00-00 cifar10
+    python docs/paper/make_results.py results/<exp> cifar10 --budgets 2000 5000 10000
 
 Nothing here fabricates numbers: if the CSV is missing a method/budget the cell is left as '--'.
 """
