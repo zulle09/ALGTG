@@ -1,0 +1,116 @@
+\begin{thebibliography}{17}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Agarwal et~al.(2020)Agarwal, Arora, Anand, and
+  Arora]{agarwal2020contextual}
+Sharat Agarwal, Himanshu Arora, Saket Anand, and Chetan Arora.
+\newblock Contextual diversity for active learning.
+\newblock In \emph{European Conference on Computer Vision (ECCV)}, 2020.
+
+\bibitem[Ash et~al.(2020)Ash, Zhang, Krishnamurthy, Langford, and
+  Agarwal]{ash2020deep}
+Jordan~T. Ash, Chicheng Zhang, Akshay Krishnamurthy, John Langford, and Alekh
+  Agarwal.
+\newblock Deep batch active learning by diverse, uncertain gradient lower
+  bounds.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2020.
+
+\bibitem[Caramalau et~al.(2021)Caramalau, Bhattarai, and
+  Kim]{caramalau2021sequential}
+Razvan Caramalau, Binod Bhattarai, and Tae-Kyun Kim.
+\newblock Sequential graph convolutional network for active learning.
+\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern
+  Recognition (CVPR)}, 2021.
+
+\bibitem[Erdem and Pelillo(2012)]{erdem2012graph}
+Aykut Erdem and Marcello Pelillo.
+\newblock Graph transduction as a noncooperative game.
+\newblock \emph{Neural Computation}, 24\penalty0 (3):\penalty0 700--723, 2012.
+
+\bibitem[Gal et~al.(2017)Gal, Islam, and Ghahramani]{gal2017deep}
+Yarin Gal, Riashat Islam, and Zoubin Ghahramani.
+\newblock Deep bayesian active learning with image data.
+\newblock In \emph{International Conference on Machine Learning (ICML)}, 2017.
+
+\bibitem[He et~al.(2016)He, Zhang, Ren, and Sun]{he2016deep}
+Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun.
+\newblock Deep residual learning for image recognition.
+\newblock In \emph{IEEE Conference on Computer Vision and Pattern Recognition
+  (CVPR)}, 2016.
+
+\bibitem[Houlsby et~al.(2011)Houlsby, Husz{\'a}r, Ghahramani, and
+  Lengyel]{houlsby2011bayesian}
+Neil Houlsby, Ferenc Husz{\'a}r, Zoubin Ghahramani, and M{\'a}t{\'e} Lengyel.
+\newblock Bayesian active learning for classification and preference learning.
+\newblock \emph{arXiv preprint arXiv:1112.5745}, 2011.
+
+\bibitem[Kim et~al.(2021)Kim, Park, Kim, and Chun]{kim2021task}
+Kwanyoung Kim, Dongwon Park, Kwang~In Kim, and Se~Young Chun.
+\newblock Task-aware variational adversarial active learning.
+\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern
+  Recognition (CVPR)}, 2021.
+
+\bibitem[Kirsch et~al.(2019)Kirsch, van Amersfoort, and
+  Gal]{kirsch2019batchbald}
+Andreas Kirsch, Joost van Amersfoort, and Yarin Gal.
+\newblock {BatchBALD}: Efficient and diverse batch acquisition for deep
+  bayesian active learning.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}, 2019.
+
+\bibitem[Kye et~al.(2023)Kye, Choi, Byun, and Chang]{kye2023tidal}
+Seong~Min Kye, Kwanghee Choi, Hyeongmin Byun, and Buru Chang.
+\newblock {TiDAL}: Learning training dynamics for active learning.
+\newblock In \emph{IEEE/CVF International Conference on Computer Vision
+  (ICCV)}, 2023.
+
+\bibitem[Parvaneh et~al.(2022)Parvaneh, Abbasnejad, Teney, Haffari, van~den
+  Hengel, and Shi]{parvaneh2022active}
+Amin Parvaneh, Ehsan Abbasnejad, Damien Teney, Gholamreza Haffari, Anton
+  van~den Hengel, and Javen~Qinfeng Shi.
+\newblock Active learning by feature mixing.
+\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern
+  Recognition (CVPR)}, 2022.
+
+\bibitem[Pelillo(1997)]{pelillo1997dynamics}
+Marcello Pelillo.
+\newblock The dynamics of nonlinear relaxation labeling processes.
+\newblock \emph{Journal of Mathematical Imaging and Vision}, 7\penalty0
+  (4):\penalty0 309--323, 1997.
+
+\bibitem[Sener and Savarese(2018)]{sener2018active}
+Ozan Sener and Silvio Savarese.
+\newblock Active learning for convolutional neural networks: A core-set
+  approach.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2018.
+
+\bibitem[Settles(2009)]{settles2009active}
+Burr Settles.
+\newblock Active learning literature survey.
+\newblock Technical Report 1648, University of Wisconsin--Madison, 2009.
+
+\bibitem[Sinha et~al.(2019)Sinha, Ebrahimi, and Darrell]{sinha2019variational}
+Samarth Sinha, Sayna Ebrahimi, and Trevor Darrell.
+\newblock Variational adversarial active learning.
+\newblock In \emph{IEEE/CVF International Conference on Computer Vision
+  (ICCV)}, 2019.
+
+\bibitem[Yoo and Kweon(2019)]{yoo2019learning}
+Donggeun Yoo and In~So Kweon.
+\newblock Learning loss for active learning.
+\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern
+  Recognition (CVPR)}, 2019.
+
+\bibitem[Zelnik-Manor and Perona(2004)]{zelnikmanor2004self}
+Lihi Zelnik-Manor and Pietro Perona.
+\newblock Self-tuning spectral clustering.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}, 2004.
+
+\end{thebibliography}
