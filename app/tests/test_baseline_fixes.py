@@ -130,6 +130,15 @@ def test_greedy_selection_never_repeats_an_index():
     assert len(picked) == 10 and len(set(picked)) == 10, f"duplicate selections: {picked}"
 
 
+def test_core_gcn_greedy_never_repeats_an_index():
+    """Same failure as CoreSet: collapsed GCN features tie at distance 0 and argmax re-picks index 0."""
+    from strategies.competitors.GCN.SequentialGCN import CoreGCN
+
+    feats = torch.ones(20, 8)
+    picked = CoreGCN._k_center_greedy(CoreGCN.__new__(CoreGCN), feats, torch.empty(0, 8), 10)
+    assert len(picked) == 10 and len(set(picked)) == 10, f"duplicate selections: {picked}"
+
+
 def test_tavaal_reparameterize_is_device_agnostic():
     """`torch.randn(*mu.size())` allocated on CPU and was only moved when mu.is_cuda,
     so on MPS (or any non-CUDA accelerator) the VAE crashed on a device mismatch."""

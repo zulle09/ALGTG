@@ -14,8 +14,12 @@ from dataset import Cls_Datasets
 
 from models.BBone_Module import Master_Model
 
-from init import get_backbone, get_ll_module_params, get_masters, get_strategies_object, dict_backbone
-from utils import create_directory, create_exp_path, plot_trail_acc, plot_res_std_mean, set_seeds, save_yamal, get_device
+from init import get_backbone, get_ll_module_params, get_masters, get_strategies_object, dict_backbone, dict_strategies_GTG
+from strategies.gtg.GTG import GTG
+from utils import (
+    create_directory, create_exp_path, plot_trail_acc, plot_res_std_mean, set_seeds, save_yamal,
+    get_device, read_rows, purge_rows, get_git_commit
+)
 
     	
 from config import cls_config, al_params
@@ -76,8 +80,9 @@ def get_args() -> argparse.Namespace:
     
     parser.add_argument('-am_s', '--affinity_matrix_strategy', type=str, required=False, choices=['uncertanity', 'diversity', 'mixed'], default='mixed', 
                        help='Different affinity matrix modification')
-    parser.add_argument('-am_ts', '--affinity_matrix_threshold_strategies', type=str, required=False, nargs='+', choices=['threshold', 'mean', 'none'], default=['mean', 'none'],
-                        help='Possible treshold strategy types to choose to apply in the affinity matrix')
+    parser.add_argument('-am_ts', '--affinity_matrix_threshold_strategies', type=str, required=False, nargs='+', choices=['threshold', 'mean', 'none'], default=['mean'],
+                        help='Possible treshold strategy types to choose to apply in the affinity matrix. '
+                             'Every GTG method is run once per -am x -am_ts combination')
     parser.add_argument('-am_t', '--affinity_matrix_threshold', type=float, required=False, default=0.5,
                         help='Affinity Matrix Threshold for our method, when threshold_strategy = mean, this is ignored')
     parser.add_argument('-am_r', '--affinity_matrix_redundancy', type=float, required=False, default=0.0,
@@ -93,19 +98,82 @@ def get_args() -> argparse.Namespace:
     #parser.add_argument('-plb', '--perc_labelled_batch', type=float,  required=False, default=0.5,
     #                    help='Number of labelled observations to mantain in each batch during GTG end-to-end version')
     parser.add_argument('-bsgtgo', '--batch_size_gtg_online', type=int,  required=False, default=32, help='Initial batch size for the online GTG version')
+    parser.add_argument('-dbg_gtg', '--debug_gtg', required=False, action='store_true',
+                        help='Log the GTG replicator dynamics at DEBUG: per-iteration state and the '
+                             'gradient hooks used to trace weights diverging to NaN. Off by default '
+                             'because each log formats a tensor and synchronises with the GPU '
+                             '(~11 KB and ~136 syncs per training batch)')
+    parser.add_argument('-ex', '--existing', type=str, required=False, choices=['append', 'resume', 'overwrite'], default='append',
+                        help='What to do with rows already in the -o results.csv for a strategy and trial. '
+                             'append: run and append (duplicates rows). resume: skip a trial whose rows are '
+                             'complete, discard a partial one and re-run it. overwrite: discard and re-run')
 
     args = parser.parse_args()
+
+    # Online GTG strategies share one GTGModule whose affinity config is set when each strategy is
+    # constructed, and all are constructed before any runs: with several combinations every online
+    # strategy would silently train and query with the last one while its name advertises its own.
+    online_gtg = [m for m in args.methods if dict_strategies_GTG.get(m) is GTG]
+    n_configs = len(args.affinity_matrix) * len(args.affinity_matrix_threshold_strategies)
+    if online_gtg and n_configs > 1:
+        parser.error(f'{", ".join(online_gtg)} would all run with the last of the {n_configs} -am x -am_ts '
+                     'combinations; pass exactly one -am and one -am_ts value')
     return args
 
 
 
 
+def run_strategy(
+        strategy: Any,
+        trial: int,
+        exp_path: str,
+        dataset_name: str,
+        existing: str,
+        n_lab_obs: List[int]
+    ) -> Dict[str, List[float]]:
+    """Run one strategy for one trial, honouring the `--existing` policy for rows already on disk.
+
+    Trials are independent (the initial split and every pool are seeded by dataset, trial and
+    cycle; each cycle reloads the `_init` checkpoint and resets the seeds), so a skipped or re-run
+    trial does not change the others.
+
+    Args:
+        strategy: A constructed strategy object exposing `strategy_name` and `run()`.
+        trial: The trial index (written to the `iter` column).
+        exp_path: The experiment folder under results/.
+        dataset_name: The dataset name.
+        existing: 'append', 'resume' or 'overwrite' (see `--existing`).
+        n_lab_obs: The labelled-set size of every AL cycle, i.e. the expected `lab_obs` values.
+
+    Returns:
+        Dict[str, List[float]]: The test metrics per cycle, read back from results.csv when the
+            trial is skipped.
+    """
+    name = strategy.strategy_name
+
+    if existing == 'resume':
+        rows = [row for row in read_rows('results.csv', exp_path, dataset_name) if row[:2] == [name, str(trial)]]
+        if sorted(int(row[2]) for row in rows) == n_lab_obs:
+            logger.info(f' => {name} trial {trial} is already complete in results.csv: skipping it')
+            test_key = list(cls_config["results_dict"]["test"].keys())[0]
+            return {test_key: [float(row[3]) for row in sorted(rows, key=lambda row: int(row[2]))]}
+
+    if existing in ('resume', 'overwrite'):
+        for filename in ('results.csv', 'count_classes.csv', '_count_classes.csv'):
+            n_removed = purge_rows(filename, exp_path, dataset_name, name, trial)
+            if n_removed: logger.info(f' => Removed {n_removed} rows of {name} trial {trial} from {filename} before running it')
+
+    return strategy.run()
+
+
+
 def run_strategies(
-        ct_p: Dict[str, Any], 
-        t_p: Dict[str, Any], 
+        ct_p: Dict[str, Any],
+        t_p: Dict[str, Any],
         gtg_p: Dict[str, Any],
-        Masters: Dict[str, Master_Model], 
-        methods: List[str]
+        Masters: Dict[str, Master_Model],
+        methods: List[str],
+        existing: str = 'append'
     ) -> Tuple[Dict[str, Dict[str, List[float]]], List[int]]:
     """
     Run the selected active learning strategies and collect their results.
@@ -119,6 +187,7 @@ def run_strategies(
         gtg_p: Configuration parameters for the GTG strategy family.
         Masters: Mapping of master model names to their corresponding model instances.
         methods: List of strategy method names to instantiate and run.
+        existing: Policy for rows already in results.csv ('append', 'resume', 'overwrite').
     Returns:
         A tuple containing:
          - A dictionary mapping each strategy name to the result returned by
@@ -136,7 +205,10 @@ def run_strategies(
     # START THE ACTIVE LEARNING PROECSS
     for strategy in strategies:
         logger.info(f'-------------------------- {strategy.strategy_name} --------------------------\n')
-        results[strategy.strategy_name] = strategy.run()
+        results[strategy.strategy_name] = run_strategy(
+            strategy=strategy, trial=ct_p["trial"], exp_path=ct_p["exp_path"],
+            dataset_name=ct_p["dataset_name"], existing=existing, n_lab_obs=n_lab_obs
+        )
     ##########################################################################################################
     
     return results, n_lab_obs               
@@ -165,7 +237,14 @@ def main() -> None:
                     format = '%(asctime)s - %(levelname)s: %(message)s',
                     datefmt = '%d-%m-%y - %H:%M:%S',
                     level = logging.INFO)
-    
+
+    # Raise only the GTG loggers: the rest of the run stays at INFO.
+    if args.debug_gtg:
+        for gtg_logger in ('models.modules.GTG.GTG_Cls', 'strategies.gtg.GTG_off'):
+            logging.getLogger(gtg_logger).setLevel(logging.DEBUG)
+
+    logger.info(f'Code version: {get_git_commit()}')
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     device = get_device(n_gpus=args.gpus)
@@ -254,7 +333,8 @@ def main() -> None:
                 t_p = cls_config,
                 gtg_p = gtg_params,
                 Masters = Masters,
-                methods = args.methods
+                methods = args.methods,
+                existing = args.existing
             )
             
             plot_trail_acc(

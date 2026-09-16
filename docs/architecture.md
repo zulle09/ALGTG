@@ -42,6 +42,9 @@ in turn.
 3. The subclass's `query(pool_subset, k) -> (pool-local indices, global indices)`.
 4. `update_sets`, which hard-fails if the labelled / unlabelled / temp-pool index sets overlap.
 
+Steps 3–4 are skipped in the last cycle: the loop ends there, so that query would select samples
+no model is ever trained on (`count_classes.csv` therefore has `al_iters - 1` rows per trial).
+
 A new strategy only implements `query()` (minimal shape: `strategies/baselines/Random.py`) and
 registers in `get_args()` choices and a `dict_strategies_*` map in `init.py`.
 
@@ -80,9 +83,10 @@ on this.
   method.
 - Constructing a `Master_Model` writes `app/checkpoints/<ds>/<model name>_init.pth.tar`. That path
   is cwd-relative, and the directories only exist because each holds a tracked `.gitignore`.
-- Constructing a strategy creates its results directories and appends its initial class counts to
-  `_count_classes.csv`. All strategies are built before the first one runs, so a crash in the first
-  method still leaves rows and folders for every method.
+- Constructing a strategy creates its results directories. All strategies are built before the
+  first one runs, so a crash in the first method still leaves folders for every method. Its initial
+  class counts go to `_count_classes.csv` at the start of `run()`, not at construction, so that a
+  strategy `main.py` skips or purges under `--existing` leaves no row behind.
 - `Cls_Datasets(...)` downloads on first use, and `init_caltech256()` mutates
   `config.cls_datasets['caltech256']['transforms']` in place (list → `Compose`).
 - `al_params`/`cls_config` are mutable module globals imported by name. `smoke_run.py` depends on
@@ -95,10 +99,10 @@ on this.
   whichever strategy trained last.
 - **Online GTG affinity config: the last strategy constructed wins.** `GTG.__init__` calls
   `define_idx_params(id_am_ts, id_am)` on the shared `GTGModule`, and every strategy is constructed
-  before any runs. With several `-am`/`-am_ts` values (the `-am_ts` default is two), all online
-  strategies train and query with the *last* combination while their names advertise their own.
-  `GTG_off` keeps its config per instance and isn't affected. Found by reading the code; not fixed,
-  not covered by a test.
+  before any runs. With several `-am`/`-am_ts` values, all online strategies would train and query
+  with the *last* combination while their names advertise their own, so `get_args()` refuses an
+  online method whose `-am` × `-am_ts` combinations multiply out to more than one
+  (`test_pipeline_fixes.py`). `GTG_off` keeps its config per instance and isn't affected.
 - The Worker picks the module loss by matching the **`method_name` string** (`'LearningLoss'`,
   `'TA_VAAL'`, `'TiDAL'`, substring `'GTG_off'`, or a `GTGModule` master). That string is the
   strategy name with the `<model name>_` prefix stripped. Renaming a strategy class changes its
@@ -124,10 +128,14 @@ on this.
   | `train_ds` | train augmentations | `(idx, img, label, moving_prob)` | training |
   | `unlab_train_ds` | test transforms | `(idx, img, label)` | every query and embedding pass, labelled samples included |
 
-  `moving_prob` is TiDAL's moving average, stored on the dataset. `get_embeddings` tells the two
-  apart by tuple length.
+  `moving_prob` is TiDAL's moving average, stored on the dataset and allocated with
+  `share_memory_()`: the Worker updates it in the main process, and forked DataLoader workers (the
+  Linux default, unlike macOS spawn) would otherwise keep reading a private, never-updated copy.
+  `get_embeddings` tells the two apart by tuple length.
 - There is no validation split. The "best" checkpoint (`check_best_path`, `load_best_checkpoint`)
-  is simply the **last epoch**, and the reported number is that checkpoint's test accuracy.
+  is simply the **last epoch**, and the reported number is that checkpoint's test accuracy, summed
+  over correct predictions and divided by the test-set size (a mean of per-batch accuracies would
+  over-weight the short last batch, differently for each batch size).
 - Online-GTG batches put labelled samples first. The worker joins a labelled batch
   (`bsgtgo × cycle`) with an unlabelled one (`bsgtgo × al_iters`) and passes `n_lab_obs`; the module
   clamps rows `[:n_lab_obs]`. Training asserts both loaders yield the same number of batches
@@ -170,22 +178,33 @@ threshold, `1 - A` re-adding self-loops, and NaN from `corrcoef`. The copies alr
     only with `-diag`.
   - Dataset level: `results.csv`, `count_classes.csv`, `_count_classes.csv` (initial counts),
     `mean_std_clf_results.csv` and `yamal_conf.yamal`.
-  - The YAML is written only after every trial of a dataset finishes.
+  - Experiment level, written by `run_sweep.py`: `logs/<ds>_<method>.log` and one
+    `.sweep_<ds>_<method>.json` per method, holding its `status`, `trials` and `extra`.
+  - The YAML is written only after every trial of a dataset finishes, so a sweep's file describes
+    whichever process finished last.
 - `results.csv` columns are `method, iter, lab_obs, test_accuracy`, but **`iter` holds the trial
-  index** (same in the count CSVs). `write_csv` only appends, so re-running into the same `-o`
-  (including `run_sweep.py --force`) adds duplicate rows.
-- `docs/paper/make_results.py` maps each `method` to a display row by the first matching substring in
-  `DISPLAY`. Consequences:
-  - every `GTG_off` strategy (`gtg` and `ll_gtg`, every `-am` × `-am_ts`) pools into
-    "ALGTG (offline)";
-  - every online variant pools into "ALGTG (ours)";
-  - both inflate `count` and narrow the CI.
+  index** (same in the count CSVs). `write_csv` only appends; `main.py -ex/--existing` decides what
+  happens to rows already there — `append` (default, duplicates them), `resume` (skip a complete
+  strategy × trial, `purge_rows` a partial one and re-run it) or `overwrite`. `run_sweep.py` passes
+  `resume`, or `overwrite` under `--force`.
+- `docs/paper/make_results.py` maps each `method` to a display row by the first matching substring
+  in `DISPLAY` (`gtg` and `ll_gtg` map to separate rows — the `LossNet_1_GTG_off` key has to
+  precede `GTG_off`). `validate()` exits rather than build a table when rows are duplicated, when a
+  strategy/budget cell doesn't have exactly `--trials` rows, or when one display row would pool
+  several strategy names (several `-am` × `-am_ts` configurations, or several online variants):
+  each of those inflates `count` and narrows the CI. The CI itself is Student-t, not z.
 - `.gitignore` excludes `*.csv`, `*.png` and `*.log` everywhere; no results are versioned.
 - Logging:
   - The logger writes only to `results/<exp>/exp_log.log`, in append mode, shared by every process
     of a sweep.
   - `run_sweep.py`'s per-method logs capture stdout/stderr, which is mostly tracebacks.
-  - `GTGModule` logs at INFO inside the replicator loop, so online runs grow `exp_log.log` fast.
+  - `GTGModule` still logs one summary line per batch, but its per-replicator-iteration state and
+    its gradient hooks are DEBUG and off unless `main.py --debug_gtg` raises the two GTG loggers.
+    Each of those formats a tensor and so synchronises with the GPU (~11 KB and ~136 syncs per
+    training batch, ~3-4 GB of log over a CIFAR-10 sweep); they are the tool for tracing weights
+    that diverge to NaN, and the NaN assertions stay on regardless. Also written at DEBUG: the same
+    per-iteration state in `GTG_off`. The saved YAML records `git_commit` (short hash,
+    `-dirty` when the checkout has uncommitted changes), which is also logged at run start.
 
 ### DDP path (work in progress)
 `-gpus > 1` goes through `mp.spawn(train_ddp)`. Known gaps:

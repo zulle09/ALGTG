@@ -68,15 +68,22 @@ class Cls_TrainWorker():
         if isinstance(self.train_dl, tuple):
             
             lab_subset, unlab_subset = self.train_dl
-            
+
+            # Same worker settings as the single-GPU path in Train_DDP.train: these two loaders
+            # carry the whole online batch (bsgtgo x (cycle + al_iters) images), so decoding and
+            # augmenting them in the main process leaves the GPU waiting. Shuffling happens in the
+            # main process either way, so the batch composition does not depend on the worker count.
+            n_workers = int(params["ct_p"].get("num_workers", 4))
+            dict_dl = dict(shuffle=True, pin_memory=True, num_workers=n_workers)
+            if n_workers > 0: dict_dl["persistent_workers"] = True
+
             self.unlab_train_dl = DataLoader(
-                dataset=unlab_subset, 
-                batch_size=self.batch_size_gtg_online * al_params["al_iters"], 
-                shuffle=True, 
-                pin_memory=True
+                dataset=unlab_subset,
+                batch_size=self.batch_size_gtg_online * al_params["al_iters"],
+                **dict_dl
             )
-                        
-            self.lab_train_dl = DataLoader(dataset=lab_subset, batch_size=self.batch_size_gtg_online * self.iter, shuffle=True, pin_memory=True)
+
+            self.lab_train_dl = DataLoader(dataset=lab_subset, batch_size=self.batch_size_gtg_online * self.iter, **dict_dl)
 
             # train() zips these two loaders; if they yield a different number of batches,
             # zip() silently truncates and both n_lab_obs and the per-epoch averaging break.
@@ -482,17 +489,18 @@ class Cls_TrainWorker():
         """
         
         self.__load_checkpoint(self.check_best_path)
-        test_accuracy = .0
+        n_correct, n_samples = .0, 0
 
         self.model.eval() # type: ignore
 
         with torch.inference_mode():
             for _, images, labels in self.test_dl:
-                
+
                 images, labels = self.return_moved_imgs_labs(images, labels)
                 outputs, _ = self.model.backbone(images) # type: ignore
-                test_accuracy += self.score_fn(outputs, labels)
+                # weight each batch by its size: a plain mean of per-batch accuracies over-weights
+                # the smaller last batch
+                n_correct += self.score_fn(outputs, labels) * labels.size(0)
+                n_samples += labels.size(0)
 
-            test_accuracy /= len(self.test_dl)
-            
-        return torch.tensor([test_accuracy], device=self.device)
+        return torch.tensor([n_correct / n_samples], device=self.device)

@@ -9,10 +9,12 @@ and emits, into this folder:
     summary_<dataset>.txt   - AUBC ranking, for the prose
 
 Usage:
-    python docs/paper/make_results.py results/2026-07-14_10-00-00 cifar10
-    python docs/paper/make_results.py results/<exp> cifar10 --budgets 2000 5000 10000
+    python docs/paper/make_results.py results/2026-07-14_10-00-00 cifar10 --trials 5
+    python docs/paper/make_results.py results/<exp> cifar10 --trials 5 --budgets 2000 5000 10000
 
 Nothing here fabricates numbers: if the CSV is missing a method/budget the cell is left as '--'.
+It refuses to run on duplicated rows, on a strategy/budget cell without exactly --trials rows, or
+when one table row would pool several strategies: each of those silently narrows the CI.
 """
 
 import argparse
@@ -21,6 +23,7 @@ import sys
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -40,6 +43,7 @@ DISPLAY = [
     ("TiDAL",         "TiDAL"),
     ("UncertainGCN",  "UncertainGCN"),
     ("CoreGCN",       "CoreGCN"),
+    ("LossNet_1_GTG_off", "ALGTG-LL (offline)"),    # ll_gtg; must precede the GTG_off substring
     ("GTG_off",       "ALGTG (offline)"),
     ("GTGModule",     "ALGTG (ours)"),
 ]
@@ -62,12 +66,38 @@ def load(exp_path: str, dataset: str) -> pd.DataFrame:
     return df
 
 
+def validate(df: pd.DataFrame, trials: int) -> None:
+    """Exit with the offending rows if the CSV cannot give an honest mean +/- CI per cell."""
+    problems = []
+
+    duplicated = df[df.duplicated(["method", "iter", "lab_obs"], keep=False)]
+    if not duplicated.empty:
+        problems.append("duplicated (method, trial, lab_obs) rows, e.g. a re-run appended to the same -o:\n"
+                        + duplicated[["method", "iter", "lab_obs"]].drop_duplicates().to_string(index=False))
+
+    counts = df.groupby(["method", "lab_obs"]).size().rename("rows").reset_index()
+    wrong = counts[counts["rows"] != trials]
+    if not wrong.empty:
+        problems.append(f"strategy/budget cells without exactly {trials} rows (crashed, still running, "
+                        "or a different --trials):\n" + wrong.to_string(index=False))
+
+    pooled = df.groupby("short")["method"].unique()
+    pooled = pooled[pooled.map(len) > 1]
+    for short, methods in pooled.items():
+        problems.append(f"table row '{short}' would pool {len(methods)} strategies: {', '.join(methods)}")
+
+    if problems:
+        sys.exit("Refusing to build the table:\n\n" + "\n\n".join(problems))
+
+
 def aggregate(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     # accuracy_score() returns a fraction; the paper reports percentages
     if df["test_accuracy"].max() <= 1.0: df["test_accuracy"] = df["test_accuracy"] * 100.
     g = df.groupby(["short", "lab_obs"])["test_accuracy"].agg(["mean", "std", "count"]).reset_index()
-    g["ci"] = 1.96 * g["std"].fillna(0.) / np.sqrt(g["count"].clip(lower=1))
+    # Student-t: z = 1.96 understates a 95% CI over a handful of trials (~30% at n=5). NaN when n < 2.
+    t_crit = stats.t.ppf(0.975, df=g["count"] - 1)
+    g["ci"] = t_crit * g["std"] / np.sqrt(g["count"])
     return g
 
 
@@ -78,7 +108,7 @@ def write_table(g: pd.DataFrame, budgets, dataset: str, out_dir: str) -> str:
     lines = [
         r"\begin{table}[t]", r"\centering",
         rf"\caption{{Test accuracy (\%) on {dataset.upper()} at increasing labelling budgets. "
-        r"Mean $\pm$ 95\% CI over the trials; best per column in bold.}",
+        r"Mean $\pm$ 95\% CI (Student-$t$) over the trials; best per column in bold.}",
         rf"\label{{tab:main-{dataset}}}",
         r"\begin{tabular}{l" + "c" * len(budgets) + "}", r"\toprule",
         "Method & " + " & ".join(str(b) for b in budgets) + r" \\", r"\midrule",
@@ -89,6 +119,7 @@ def write_table(g: pd.DataFrame, budgets, dataset: str, out_dir: str) -> str:
         sub = g[g["lab_obs"] == b]
         if not sub.empty: best[b] = sub.loc[sub["mean"].idxmax(), "short"]
 
+    ours_started = False
     for key, label in present:
         cells = []
         for b in budgets:
@@ -96,9 +127,11 @@ def write_table(g: pd.DataFrame, budgets, dataset: str, out_dir: str) -> str:
             if row.empty:
                 cells.append("--"); continue
             m, ci = float(row["mean"].iloc[0]), float(row["ci"].iloc[0])
-            cell = f"{m:.2f}\\pm{ci:.2f}"
+            cell = f"{m:.2f}" if np.isnan(ci) else f"{m:.2f}\\pm{ci:.2f}"
             cells.append(rf"$\mathbf{{{cell}}}$" if best.get(b) == key else f"${cell}$")
-        if "ALGTG" in label: lines.append(r"\midrule")
+        if "ALGTG" in label and not ours_started:
+            lines.append(r"\midrule")
+            ours_started = True
         lines.append(f"{label} & " + " & ".join(cells) + r" \\")
 
     lines += [r"\bottomrule", r"\end{tabular}", r"\end{table}", ""]
@@ -118,7 +151,7 @@ def write_curve(g: pd.DataFrame, dataset: str, out_dir: str) -> str:
                  lw=2.4 if ours else 1.3, zorder=3 if ours else 2,
                  marker="o" if ours else None, ms=4,
                  color="crimson" if label == "ALGTG (ours)" else None)
-        plt.fill_between(sub["lab_obs"], sub["mean"] - sub["ci"], sub["mean"] + sub["ci"], alpha=0.15)
+        plt.fill_between(sub["lab_obs"], sub["mean"] - sub["ci"].fillna(0.), sub["mean"] + sub["ci"].fillna(0.), alpha=0.15)
 
     plt.xlabel("# labelled observations"); plt.ylabel("Test accuracy (%)")
     plt.title(f"{dataset.upper()}"); plt.grid(alpha=0.3); plt.legend(fontsize=8)
@@ -153,11 +186,13 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("exp_path", help="e.g. results/2026-07-14_10-00-00")
     ap.add_argument("dataset")
+    ap.add_argument("--trials", type=int, required=True, help="trials every strategy/budget cell must have")
     ap.add_argument("--budgets", type=int, nargs="+", default=[2000, 4000, 6000, 8000, 10000])
     a = ap.parse_args()
 
     out_dir = os.path.dirname(os.path.abspath(__file__))
     df = load(a.exp_path, a.dataset)
+    validate(df, a.trials)
     g = aggregate(df)
 
     print(f"loaded {len(df)} rows | methods: {sorted(g['short'].unique())}")

@@ -73,16 +73,7 @@ class ActiveLearner():
                 dataset=Subset(self.dataset.train_ds, self.labelled_indices)).values()
         )
 
-        # save the initial count classes in the csv file
-        write_csv(
-            filename = '_count_classes.csv',
-            exp_path = self.ct_p["exp_path"],
-            dataset_name = self.ct_p["dataset_name"],
-            head = ['method', 'iter', 'lab_obs'] + self.dataset.classes,
-            values = [self.strategy_name, self.ct_p["trial"], self.iter * al_params["n_top_k_obs"]] + self.count_classes[self.iter * al_params["n_top_k_obs"]]
-        )
-        
-        
+
     
     def save_labelled_images(self, new_labelled_idxs: List[int]) -> None:
         """Save newly labelled images to disk for visual analysis.
@@ -495,7 +486,17 @@ class ActiveLearner():
         """
             
         results_format = copy.deepcopy(self.t_p["results_dict"])
-                
+
+        # Written here rather than in __init__: every strategy is constructed before any runs, and
+        # main.py may skip or purge a strategy (resume) after construction without leaving rows.
+        write_csv(
+            filename = '_count_classes.csv',
+            exp_path = self.ct_p["exp_path"],
+            dataset_name = self.ct_p["dataset_name"],
+            head = ['method', 'iter', 'lab_obs'] + self.dataset.classes,
+            values = [self.strategy_name, self.ct_p["trial"], self.iter * al_params["n_top_k_obs"]] + self.count_classes[self.iter * al_params["n_top_k_obs"]]
+        )
+
         # start of the loop
         while self.iter <= al_params["al_iters"]:
             
@@ -512,7 +513,10 @@ class ActiveLearner():
                 iter=self.iter, 
                 results_format=results_format
             )
-            
+
+            # the loop ends here, so a query now would select samples that are never trained on
+            if self.iter == al_params["al_iters"]: break
+
             logger.info(' START QUERY PROCESS\n')
             
             # run method query strategy

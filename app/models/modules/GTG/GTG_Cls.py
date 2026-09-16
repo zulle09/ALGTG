@@ -16,6 +16,18 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def gtg_debug() -> bool:
+    """True when `main.py --debug_gtg` raised this module's logger to DEBUG.
+
+    The gradient hooks and the per-replicator-iteration state logs below are the tools for chasing
+    weights that diverge to NaN, but each one formats a tensor and therefore synchronises with the
+    accelerator: at INFO they cost ~11 KB of log and ~136 syncs per training batch (~3-4 GB over a
+    CIFAR-10 sweep). They stay available, off by default. The NaN assertions on `y_pred`, `y_true`
+    and the embeddings are unaffected, so a NaN still stops the run and names the tensor.
+    """
+    return logger.isEnabledFor(logging.DEBUG)
+
+
         
 
 class GTGModule(nn.Module):
@@ -457,12 +469,12 @@ class GTGModule(nn.Module):
 
         while err > self.gtg_tol and i < self.gtg_max_iter:
 
-            if X.requires_grad: X.register_hook(lambda grad: logger.info(f'1- X grad: {grad.sum()}\n'))
+            if X.requires_grad and gtg_debug(): X.register_hook(lambda grad: logger.debug(f'1- X grad: {grad.sum()}\n'))
 
             X_old = X.detach().clone()
 
             X_num = X * torch.mm(A, X)
-            if X_num.requires_grad: X_num.register_hook(lambda grad: logger.info(f'2- X grad: {grad.sum()}'))
+            if X_num.requires_grad and gtg_debug(): X_num.register_hook(lambda grad: logger.debug(f'2- X grad: {grad.sum()}'))
             row_sum = torch.sum(X_num, dim=1, keepdim=True)
             # A player that receives no payoff from anyone (an isolated node, e.g. after
             # thresholding) has an undefined 0/0 update and no incentive to move: keep its
@@ -470,13 +482,13 @@ class GTGModule(nn.Module):
             # vector, which leaves the simplex, breaks the game interpretation, and yields
             # entropy ~0 so the point could never be queried.
             X = torch.where(row_sum <= 1e-12, X, X_num / row_sum.clamp(min=1e-8))
-            if X.requires_grad: X.register_hook(lambda grad: logger.info(f'3- X grad: {grad.sum()}'))
+            if X.requires_grad and gtg_debug(): X.register_hook(lambda grad: logger.debug(f'3- X grad: {grad.sum()}'))
 
             # Keep labelled observations fixed as hard anchors during propagation.
             if self.n_lab_obs > 0:
                 X = torch.cat((self.X[:self.n_lab_obs], X[self.n_lab_obs:]), dim=0)
 
-            logger.info(f'X: {X[self.n_lab_obs:].argmax(dim=1).unique(return_counts=True)}')
+            if gtg_debug(): logger.debug(f'X: {X[self.n_lab_obs:].argmax(dim=1).unique(return_counts=True)}')
 
             unlab_ent_list.append(entropy(X[self.n_lab_obs:, :]).to(self.device))
 
@@ -645,7 +657,7 @@ class GTGModule(nn.Module):
             
         else: labelled_mask = None
         
-        if y_pred.requires_grad: y_pred.register_hook(lambda grad: logger.info(f'y_pred grad: {grad.sum()}'))
+        if y_pred.requires_grad and gtg_debug(): y_pred.register_hook(lambda grad: logger.debug(f'y_pred grad: {grad.sum()}'))
         
         return (y_pred, y_true), labelled_mask
 

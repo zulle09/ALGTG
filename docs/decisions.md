@@ -12,6 +12,80 @@ Format:
 
 ---
 
+## 2026-09-16 — GTG's NaN-hunting logs move to DEBUG behind `--debug_gtg`
+The gradient hooks and per-replicator-iteration state logs in `GTG_Cls.py` (mirrored in
+`GTG_off.py`) were added to chase weights diverging to NaN, and they work — but each formats a
+tensor and synchronises with the GPU: ~11 KB and ~136 syncs per training batch, ~3-4 GB of log per
+online method over a CIFAR-10 sweep. They are now DEBUG, raised only by `main.py --debug_gtg`
+(measured on the smoke protocol: 188 KB -> 28 KB with the flag off, identical output with it on).
+Deleting them was the alternative and was rejected: they are the only trace of *where* a NaN
+enters. The NaN assertions on `y_pred`/`y_true`/embeddings stay at all times, so a run still fails
+loudly. The same commit logs `git_commit` at run start and stores it in `yamal_conf.yamal`, so a
+number can be traced back to the code that produced it.
+Revisit if a NaN turns out to need more than one batch of gradient history.
+
+## 2026-09-16 — Test accuracy is sample-weighted, and CIs use Student-t
+`Cls_TrainWorker.test` averaged per-batch accuracies, which over-weights the short last batch: on
+CIFAR-10 a constant-class predictor (true accuracy 0.1000) reported up to 0.1010 at batch size 128
+and 0.1021 at 256 — and online GTG uses 256 while the baselines use 128, so the error differed
+between method families. It now sums correct predictions over the test set. In the same spirit,
+`make_results.py` and `plot_res_std_mean` use t(0.975, n-1) instead of z = 1.96, which understated
+a 5-trial CI by ~30%. Both change reported numbers, so results produced earlier are not comparable.
+Revisit only if the metric definition changes; train-curve accuracy is still a per-batch mean
+(curves only, never reported).
+
+## 2026-09-16 — TiDAL's moving average lives in shared memory
+`moving_prob` is updated in the main process but read through DataLoader workers. With `fork` (the
+Linux default) the workers keep a private copy, so with the default `-nw 4` TiDAL's KL target was
+always zeros; macOS `spawn` hid this, so no smoke run caught it. It is now allocated with
+`share_memory_()` (`test_pipeline_fixes.py` locks it in with a fork read-back). Any TiDAL number
+produced on Linux with workers is invalid.
+Revisit if batches ever stop being unique per epoch, since prefetching would then race.
+
+## 2026-09-16 — Trial-level resume instead of restarting a crashed method
+`main.py -ex/--existing {append,resume,overwrite}` decides what happens to rows already in
+`results.csv` for a strategy and trial, and `run_sweep.py` records each method's `--trials` and
+`--extra` in `.sweep_<ds>_<method>.json` and re-launches a crashed method with `resume`. Before
+this, resuming appended a second copy of every finished trial, and a `--trials 1` timing run into
+the same `-o` marked the method done so the real sweep skipped it. Restarting the method from trial
+0 would have been simpler, but on a preemptible GPU it throws away finished trials. Trials are
+independent (splits and pools are seeded by dataset/trial/cycle, every cycle reloads `_init` and
+re-seeds), which is what makes skipping them sound.
+Revisit if trials stop being independent, or if a scheduler takes over retries.
+
+## 2026-09-16 — make_results refuses data that would narrow the CI
+`validate()` exits on duplicated rows, on any strategy/budget cell without exactly `--trials` rows,
+and when one display row would pool several strategies; `ll_gtg` gets its own "ALGTG-LL (offline)"
+row. Pooling different methods or configurations inflates `count` and shrinks the interval, which
+is the kind of error a reader cannot see. This supersedes the pooling noted in the 2026-08-17
+"Paper numbers are generated" entry.
+Revisit to report per-configuration rows (an `-am_r` ablation table), which means extending
+`DISPLAY` rather than relaxing the check.
+
+## 2026-09-16 — A failing plot no longer kills a run
+`utils.save_figure` logs a `savefig` exception and continues. A broken font stack (matplotlib 3.11
+with freetype 2.14 raises "raster overflow" on any text) otherwise killed every method right after
+its first AL cycle, because train curves are written per cycle. This is a workaround: plots are
+diagnostics and the CSVs carry the numbers, but it is not a fix for the environment, so the runbook
+pre-flight now checks that this host can render a figure at all. Only the save is guarded — bugs in
+preparing the plotted data still raise.
+Revisit if plots ever become load-bearing for a result.
+
+## 2026-09-16 — `-am_ts` defaults to `mean`, and online GTG refuses several configs
+The default was `mean none`, so every GTG method ran twice per sweep, and because online variants
+share one `GTGModule` whose config is set at construction, both instances trained with the last
+combination while their names advertised their own. The default is now the single value `mean` (what
+every recorded command already passed) and `get_args()` rejects an online GTG method whose
+`-am` × `-am_ts` combinations multiply out to more than one.
+Revisit if the online strategies ever get their own module instance.
+
+## 2026-09-16 — No query in the last AL cycle
+`ActiveLearner.run` stops after the last cycle's training instead of querying samples that are
+never trained on. This saves a full query per trial (for TA-VAAL ~20k VAE iterations, for `GTG_off`
+a GTG over ~20k nodes) and removes the trailing `count_classes.csv` row, which now has
+`al_iters - 1` rows per trial.
+Revisit if an analysis needs the class distribution of a query at the final budget.
+
 ## 2026-08-17 — One process per method for benchmark sweeps
 `run_sweep.py` runs each method as its own `main.py` process into a shared `-o`. `-o` was added to
 `main.py` in the same commit so the processes accumulate into one `results.csv`. The script records

@@ -22,9 +22,13 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
+import matplotlib.figure
+from scipy import stats
+
 from utils import (
     MARKERS, _is_random_method, count_class_observation, entropy, get_palette,
-    plot_gtg_entropy_tensor, plot_res_std_mean, plot_trail_acc, set_seeds, write_csv,
+    plot_gtg_entropy_tensor, plot_res_std_mean, plot_trail_acc, purge_rows, read_rows,
+    save_train_val_curves, set_seeds, write_csv,
 )
 
 
@@ -195,6 +199,76 @@ def test_mean_std_has_no_nan_with_a_single_trial():
             out = pd.read_csv('results/exp/cifar10/mean_std_clf_results.csv')
             assert not out.isna().any().any(), out
             assert (out['ci_lower'] == out['mean']).all()  # zero-width CI for n = 1
+        finally:
+            os.chdir(cwd)
+
+
+def test_mean_std_ci_uses_student_t():
+    """z = 1.96 understated the 95% CI over 5 trials by ~30%; the half-width must use t(0.975, n-1)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        cwd = os.getcwd()
+        os.chdir(tmp)
+        try:
+            os.makedirs('results/exp/cifar10', exist_ok=True)
+            accuracies = [50., 52., 55., 57., 61.]
+            pd.DataFrame({
+                'method': ['ResNet_Random'] * 5, 'iter': list(range(5)),
+                'lab_obs': [100] * 5, 'test_accuracy': accuracies,
+            }).to_csv('results/exp/cifar10/results.csv', index=False)
+
+            plot_res_std_mean(exp_path='exp', dataset_name='cifar10')
+
+            out = pd.read_csv('results/exp/cifar10/mean_std_clf_results.csv')
+            expected = stats.t.ppf(0.975, 4) * np.std(accuracies, ddof=1) / np.sqrt(5)
+            assert np.isclose(out['ci_upper'].iloc[0] - out['mean'].iloc[0], expected), out
+        finally:
+            os.chdir(cwd)
+
+
+def test_save_figure_survives_a_render_failure():
+    """A broken font stack raised inside savefig after every AL cycle and killed the whole run."""
+    def broken_savefig(self, *args, **kwargs):
+        raise RuntimeError('FT_Render_Glyph failed with error 0x62: raster overflow')
+
+    original_savefig = matplotlib.figure.Figure.savefig
+    matplotlib.figure.Figure.savefig = broken_savefig
+    plt.close('all')
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                keys = ['train_accuracy', 'train_loss', 'train_loss_ce', 'train_pred_loss']
+                save_train_val_curves(
+                    list_dict_keys=keys, results_info={k: [1., 2.] for k in keys},
+                    strategy_name='ResNet_Random', exp_path='exp', dataset_name='cifar10',
+                    al_iter=1, cicle_iter=0,
+                )  # must not raise
+                assert len(plt.get_fignums()) == 0, 'the figure was not closed after the failure'
+            finally:
+                os.chdir(cwd)
+    finally:
+        matplotlib.figure.Figure.savefig = original_savefig
+
+
+def test_purge_rows_removes_only_the_target_trial():
+    """Resume discards a partial trial; every other row must survive untouched."""
+    with tempfile.TemporaryDirectory() as tmp:
+        cwd = os.getcwd()
+        os.chdir(tmp)
+        try:
+            head = ['method', 'iter', 'lab_obs', 'test_accuracy']
+            rows = [['ResNet_Random', 0, 1000, 0.5], ['ResNet_Random', 1, 1000, 0.25],
+                    ['ResNet_Entropy', 1, 1000, 0.125], ['ResNet_Random', 1, 2000, 0.375]]
+            for row in rows:
+                write_csv(filename='results.csv', exp_path='exp', dataset_name='cifar10', head=head, values=row)
+
+            n_removed = purge_rows('results.csv', 'exp', 'cifar10', 'ResNet_Random', 1)
+
+            assert n_removed == 2
+            assert read_rows('results.csv', 'exp', 'cifar10') == [
+                ['ResNet_Random', '0', '1000', '0.5'], ['ResNet_Entropy', '1', '1000', '0.125']]
+            assert purge_rows('missing.csv', 'exp', 'cifar10', 'ResNet_Random', 1) == 0
         finally:
             os.chdir(cwd)
 

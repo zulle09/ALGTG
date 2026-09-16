@@ -10,12 +10,14 @@ import matplotlib.colors as mcolors
 import matplotlib.lines as mlines
 
 from sklearn.manifold import TSNE
+from scipy import stats
 import seaborn as sns
 import pandas as pd
 import numpy as np
 import csv
 import os
 import copy
+import subprocess
 import yaml
 import random
 from matplotlib.typing import ColorType
@@ -38,6 +40,37 @@ MARKERS = ['o', 's', '^', 'D', 'v', 'P', 'X', '*', '<', '>']
 # random unlabelled sub-sample and were no longer comparable. Keep plotting off the experiment's
 # RNG entirely.
 _PALETTE_RNG = random.Random(0)
+
+# Set after the first plot that fails to render, so the full traceback is logged once per process.
+_plot_failure_logged = False
+
+
+def save_figure(fig: plt.Figure, path: str) -> None:
+    """Save a figure to `path` and close it, logging a rendering failure instead of raising.
+
+    Plots are diagnostics; the numbers live in the CSVs. A broken font stack (matplotlib 3.11 with
+    freetype 2.14 raises "FT_Render_Glyph ... raster overflow" on any text) would otherwise kill a
+    sweep after the first AL cycle of every method. Only the save is guarded: bugs in preparing the
+    plotted data still raise.
+
+    Args:
+        fig: The figure to save.
+        path: Destination file path.
+
+    Returns:
+        None
+    """
+    global _plot_failure_logged
+    try:
+        fig.savefig(path)
+    except Exception:
+        if not _plot_failure_logged:
+            logger.exception(f'Could not save plot {path}; continuing without it')
+            _plot_failure_logged = True
+        else:
+            logger.error(f'Could not save plot {path}')
+    finally:
+        plt.close(fig)
 
 
 def _is_random_method(strategy_name: str) -> bool:
@@ -156,11 +189,12 @@ def plot_trail_acc(
     plt.grid(True)
     plt.legend(handles=lines_handles)
 
-    if save_plot: plt.savefig(f'results/{exp_path}/{plot_png_name}')
-    else: plt.show()
-    # figures are never reused: without this every AL iteration leaks one, and matplotlib starts
-    # warning past 20 open figures.
-    plt.close(fig)
+    # figures are never reused: without closing, every AL iteration leaks one, and matplotlib starts
+    # warning past 20 open figures (save_figure closes it).
+    if save_plot: save_figure(fig, f'results/{exp_path}/{plot_png_name}')
+    else:
+        plt.show()
+        plt.close(fig)
 
     
     
@@ -214,8 +248,7 @@ def save_train_val_curves(
         
     # save the plot in the respective strategy folder
     plt.suptitle(f'Iteration: {al_iter} - {strategy_name}', fontsize = 30)
-    plt.savefig(f'results/{exp_path}/{dataset_name}/{cicle_iter}/{strategy_name}/train_val_plots/{al_iter}.png')
-    plt.close(fig)
+    save_figure(fig, f'results/{exp_path}/{dataset_name}/{cicle_iter}/{strategy_name}/train_val_plots/{al_iter}.png')
 
 
 
@@ -275,8 +308,7 @@ def plot_cumulative_train_results(
 
     # save the plot in the respective strategy folder
     plt.suptitle(f'Cumulative Train Results - {strategy_name}', fontsize = 30)
-    plt.savefig(f'results/{exp_path}/{dataset_name}/{cicle_iter}/{strategy_name}/train_val_plots/cumulative_train_results.png')
-    plt.close(fig)
+    save_figure(fig, f'results/{exp_path}/{dataset_name}/{cicle_iter}/{strategy_name}/train_val_plots/cumulative_train_results.png')
 
 
 
@@ -323,8 +355,7 @@ def plot_entropy_iterations_classes(
     plt.ylabel('Entropy', fontsize=15)
     plt.title('Class Counts Entropy through Iteration', fontsize=30)
     plt.grid(True)
-    plt.savefig(f'results/{exp_path}/{dataset_name}/{cicle_iter}/{strategy_name}/entropy_class_iterations.png')
-    plt.close(fig)
+    save_figure(fig, f'results/{exp_path}/{dataset_name}/{cicle_iter}/{strategy_name}/entropy_class_iterations.png')
 
 
 
@@ -369,8 +400,7 @@ def plot_classes_count_iterations(
     plt.title('Class Observations Count by Iteration', fontsize=30)
     if len(class_labels) <= 10: plt.legend()
     plt.grid(True)
-    plt.savefig(f'results/{exp_path}/{dataset_name}/{cicle_iter}/{strategy_name}/classes_count_iterations.png')
-    plt.close(fig)
+    save_figure(fig, f'results/{exp_path}/{dataset_name}/{cicle_iter}/{strategy_name}/classes_count_iterations.png')
 
 
 
@@ -411,6 +441,57 @@ def write_csv(
 
     with open(res_path, 'a', encoding='UTF8', newline='') as f:
         csv.writer(f).writerow(values)
+
+
+
+def read_rows(filename: str, exp_path: str, dataset_name: str) -> List[List[str]]:
+    """Return the data rows (header excluded) of a CSV written by `write_csv`.
+
+    Args:
+        filename: The name of the CSV file.
+        exp_path: The experiment path subdirectory within results.
+        dataset_name: The dataset name subdirectory within the experiment path.
+
+    Returns:
+        List[List[str]]: The rows as strings, or an empty list if the file does not exist yet.
+    """
+    res_path = os.path.join('results', exp_path, dataset_name, filename)
+    if not os.path.exists(res_path): return []
+    with open(res_path, 'r', encoding='UTF8', newline='') as f:
+        return list(csv.reader(f))[1:]
+
+
+
+def purge_rows(filename: str, exp_path: str, dataset_name: str, strategy_name: str, trial: int) -> int:
+    """Remove the rows of one strategy and trial from a CSV written by `write_csv`.
+
+    Used to discard a partially written trial before it is re-run. The file is rewritten through a
+    temporary file and `os.replace`, so a crash mid-rewrite cannot truncate other methods' rows.
+
+    Args:
+        filename: The name of the CSV file.
+        exp_path: The experiment path subdirectory within results.
+        dataset_name: The dataset name subdirectory within the experiment path.
+        strategy_name: Value of the `method` column to remove.
+        trial: Value of the `iter` column (which holds the trial index) to remove.
+
+    Returns:
+        int: The number of rows removed.
+    """
+    res_path = os.path.join('results', exp_path, dataset_name, filename)
+    if not os.path.exists(res_path): return 0
+
+    with open(res_path, 'r', encoding='UTF8', newline='') as f:
+        rows = list(csv.reader(f))
+    kept = rows[:1] + [row for row in rows[1:] if row[:2] != [strategy_name, str(trial)]]
+
+    n_removed = len(rows) - len(kept)
+    if n_removed:
+        tmp_path = f'{res_path}.tmp'
+        with open(tmp_path, 'w', encoding='UTF8', newline='') as f:
+            csv.writer(f).writerows(kept)
+        os.replace(tmp_path, res_path)
+    return n_removed
 
 
 
@@ -622,8 +703,7 @@ def plot_gtg_entropy_tensor(
     if show_legend: axes[1].legend()
 
     plt.suptitle(f'{title} - Iteration {iter}', fontsize = 30)
-    plt.savefig(f'{path}/gtg_entropies_plots/{dir}/{iter}.png')
-    plt.close(fig)
+    save_figure(fig, f'{path}/gtg_entropies_plots/{dir}/{iter}.png')
     
 
 
@@ -666,7 +746,10 @@ def plot_res_std_mean(
     # With a single trial pandas' std is NaN; the CI is then NaN, the band silently disappears and
     # the saved CSV carries NaNs into the paper pipeline. A single sample has zero-width CI.
     df_grouped["std"] = df_grouped["std"].fillna(0.)
-    df_grouped["ci"] = 1.96 * df_grouped["std"] / np.sqrt(df_grouped["count"])
+    # Student-t rather than z = 1.96: with a handful of trials z understates the 95% CI (~30% at n=5).
+    # df is clipped to 1 only to keep ppf finite for a single trial, whose CI is zero-width anyway.
+    t_crit = stats.t.ppf(0.975, df=(df_grouped["count"] - 1).clip(lower=1))
+    df_grouped["ci"] = t_crit * df_grouped["std"] / np.sqrt(df_grouped["count"])
     df_grouped["ci_lower"] = df_grouped["mean"] - df_grouped["ci"]
     df_grouped["ci_upper"] = df_grouped["mean"] + df_grouped["ci"]
 
@@ -696,8 +779,7 @@ def plot_res_std_mean(
     plt.legend(handles=lines_handles)
     plt.grid(True)
 
-    plt.savefig(f'results/{exp_path}/{dataset_name}/mean_std_results.png')
-    plt.close(fig)
+    save_figure(fig, f'results/{exp_path}/{dataset_name}/mean_std_results.png')
     
 
 
@@ -801,8 +883,7 @@ def plot_tsne_A(
     plt.suptitle(f'Affinity Matrix TSNE Plots - Iteration {iter}', fontsize=30)
 
     create_directory(f'results/{exp_path}/{ds_name}/{samp_iter}/{method}/tsne_plots/{affinity}_matrix')
-    plt.savefig(f'results/{exp_path}/{ds_name}/{samp_iter}/{method}/tsne_plots/{affinity}_matrix/{iter}.png')
-    plt.close(fig)
+    save_figure(fig, f'results/{exp_path}/{ds_name}/{samp_iter}/{method}/tsne_plots/{affinity}_matrix/{iter}.png')
     
     
     
@@ -921,8 +1002,7 @@ def plot_new_labelled_tsne(
         sns_p.legend([], [], frameon=False)
 
     plt.suptitle(f'TSNE Plot - Iteration {iter}', fontsize=30)
-    plt.savefig(f'results/{exp_path}/{ds_name}/{samp_iter}/{method}/tsne_plots/{iter}.png')
-    plt.close(fig)
+    save_figure(fig, f'results/{exp_path}/{ds_name}/{samp_iter}/{method}/tsne_plots/{iter}.png')
 
     
     
@@ -1012,6 +1092,29 @@ def log_assert(condition: bool | torch.Tensor, message: str):
         raise err
     
     
+def get_git_commit() -> str:
+    """Return the short commit this run is executing, marked `-dirty` with uncommitted changes.
+
+    Results are keyed by strategy name and `-o` only, so without this nothing ties a number in the
+    paper back to the code that produced it.
+
+    Returns:
+        str: e.g. '3f395b8' or '3f395b8-dirty', or 'unknown' outside a git checkout.
+    """
+    try:
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        commit = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'], cwd=repo,
+                                capture_output=True, text=True, timeout=10)
+        if commit.returncode != 0: return 'unknown'
+        dirty = subprocess.run(['git', 'status', '--porcelain'], cwd=repo,
+                               capture_output=True, text=True, timeout=10)
+        return commit.stdout.strip() + ('-dirty' if dirty.stdout.strip() else '')
+    except Exception:
+        logger.warning('Could not read the git commit of this checkout', exc_info=True)
+        return 'unknown'
+
+
+
 def save_yamal(
         common_training_params: Dict[str, Any], 
         task_params: Dict[str, Any], 
@@ -1043,6 +1146,7 @@ def save_yamal(
     """
     
     yaml_dict = copy.deepcopy(common_training_params)
+    yaml_dict["git_commit"] = get_git_commit()
     yaml_dict.update(task_params)
     yaml_dict.update(al_params)
     yaml_dict.update(gtg_params)

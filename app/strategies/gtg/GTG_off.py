@@ -398,7 +398,10 @@ class GTG_off(ActiveLearner):
             if n_lab_obs > 0:
                 self.X[:n_lab_obs] = lab_X_init
 
-            logger.info(f'X: {self.X[len(self.labelled_indices):].argmax(dim=1).unique(return_counts=True)}')
+            # per-iteration state: as in GTG_Cls, only with --debug_gtg (it formats a tensor, and
+            # the offline pool is much larger than a batch)
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f'X: {self.X[len(self.labelled_indices):].argmax(dim=1).unique(return_counts=True)}')
 
             self.unlab_entropy_hist[:, i] = entropy(self.X)[len(self.labelled_indices):]
 

@@ -31,7 +31,13 @@ in `docs/architecture.md`.
    python app/tests/test_gtg_theory.py
    python app/tests/test_baseline_fixes.py
    python app/tests/test_utils_fixes.py
+   python app/tests/test_pipeline_fixes.py
    for m in random entropy coreset badge bald cdal alphamix uncertaingcn coregcn ll tidal tavaal gtg ll_gtg lsmlps_gtg; do python app/tests/smoke_run.py $m || echo "FAIL $m"; done
+   ```
+   Also check that this host can actually render a plot. A failing `savefig` no longer kills a run
+   (it is logged and skipped), so without this check the sweep silently produces no figures:
+   ```
+   python -c "import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt; plt.title('x'); plt.savefig('/tmp/t.png')"
    ```
    `smoke_run.py` writes to `app/checkpoints/cifar10/` under the real strategy names. Never run it
    while a CIFAR-10 sweep is running from the same checkout.
@@ -39,34 +45,40 @@ in `docs/architecture.md`.
    ```
    tmux new -s sweep
    conda activate algtg
-   python run_sweep.py -o <exp> -ds cifar10 --trials 1 -m random      # time one method
+   python run_sweep.py -o timing -ds cifar10 --trials 1 -m random     # time one method, own -o
    python run_sweep.py -o <exp> -ds cifar10 --trials 5 --extra -am <am> -am_ts <ts> -e_s <es>
    ```
+   Give the timing run its own `-o`: a method's recorded `--extra` must match on every later run
+   into the same folder, and the sweep passes GTG flags the timing run doesn't.
    Pass exactly one value per GTG option (see CLAUDE.md), and keep `--extra` last. Detach with
    `Ctrl-b d`; reattach with `tmux attach -t sweep`. TODO: record the flagship GTG configuration
    here once it's chosen.
 6. **When it finishes:**
    ```
    python run_sweep.py -o <exp> -ds cifar10 --status
-   python docs/paper/make_results.py results/<exp> cifar10 --budgets 2000 4000 6000 8000 10000
+   python docs/paper/make_results.py results/<exp> cifar10 --trials 5 --budgets 2000 4000 6000 8000 10000
    ```
-   Check `docs/paper/summary_cifar10.txt` against `docs/paper/RESULTS_PLAN.md` §1 before trusting any number.
-   A `trials` value above `--trials` means pooled configs or duplicated rows.
+   `make_results.py` refuses to build a table on duplicated rows, on a strategy/budget cell that
+   doesn't have exactly `--trials` rows, or when a table row would pool several strategies; its
+   message names the offending cells. Check `docs/paper/summary_cifar10.txt` against
+   `docs/paper/RESULTS_PLAN.md` §1 before trusting any number.
    TODO: how results are copied off the host and archived.
 
 ## Rollback: undo bad results
 
-`results.csv` is append-only and no tooling removes rows. The safe rollback is a **fresh `-o`**.
+`main.py` only ever appends rows; removing them is `--existing resume|overwrite`, which
+`run_sweep.py` drives for you. For anything it does not cover, the safe rollback is a **fresh
+`-o`**.
 
 - **A bug invalidated a method's numbers.** Fix it, run the pre-flight tests, and re-run that
-  method into a new `-o`. Don't `--force` into the old one: that appends new rows beside the
-  invalid ones, and `make_results.py` averages both.
-- **A method crashed mid-run.** Its finished cycles are already in `results.csv`, but it has no
-  `.done_` marker. Re-running restarts it at trial 0 and duplicates those cycles. TODO: choose a
-  procedure (re-run into a new `-o` and merge CSVs, or prune the method's rows first). Neither is
-  scripted.
-- **Re-run one finished method:** `rm results/<exp>/.done_<ds>_<method>`. The duplicate-row caveat
-  applies here too.
+  method into a new `-o`. `--force` into the old one is only safe when the fix does not change the
+  strategy names: it replaces that method's rows, but rows written under a name the fixed code no
+  longer produces would stay behind.
+- **A method crashed mid-run.** Re-run the same `run_sweep.py` command. Its state file still says
+  `running`, so it is re-launched with `--existing resume`: complete trials are skipped, the
+  partial one is purged and re-run.
+- **Re-run one finished method:** `python run_sweep.py -o <exp> -ds <ds> -m <method> --trials <n>
+  --force`, with the same `--extra` as the original run. It replaces that method's rows.
 - **Code:** TODO: nothing ties a results folder to a commit, so there's no defined way to find the
   code that produced it.
 
@@ -113,7 +125,7 @@ python -c "import pandas as pd; df = pd.read_csv('results/<exp>/<ds>/results.csv
 |---|---|---|
 | `GTG online loaders are misaligned` | `al_params` / `-bsgtgo` break the invariant | see Migrations |
 | `embedding is nan`, `std is zero or negative` | backbone training diverged | TODO: known remedies |
-| `y_pred is nan`, `y_true is nan` | NaN in the GTG head or entropy | run `test_gtg_smoke.py`, `test_gtg_theory.py` |
+| `y_pred is nan`, `y_true is nan` | NaN in the GTG head or entropy | run `test_gtg_smoke.py`, `test_gtg_theory.py`; re-run that method with `--debug_gtg` for the per-iteration state and gradient sums |
 | `NON EMPTY INDICES INTERSECTION`, or `list.remove(x): x not in list` in `update_sets` | a `query()` returned a duplicate or out-of-pool index | bug in that strategy's `query()` |
 | `Invalid method_name` | a strategy class was renamed | architecture.md → shared mutable state |
 | `FileNotFoundError` under `app/checkpoints/` | `main.py` not run from the repo root | `cd` to the root (`run_sweep.py` sets cwd itself) |
@@ -121,6 +133,8 @@ python -c "import pandas as pd; df = pd.read_csv('results/<exp>/<ds>/results.csv
 | CUDA out of memory | `cls_config` batch sizes; the online batch is `bsgtgo × (cycle + al_iters)` and grows each cycle | TODO: tested lower settings per dataset (changing `-bsgtgo` interacts with the invariant) |
 | `OMP: Error #15` (macOS) | duplicate OpenMP runtime | `export KMP_DUPLICATE_LIB_OK=TRUE` (`main.py` and `environment.yml` set it) |
 | Process gone, no traceback | killed from outside (OOM killer, preemption, no tmux) | `dmesg -T \| grep -i -E 'killed process\|out of memory'`; TODO: provider-side preemption check |
+| `Could not save plot ...` in `exp_log.log` | this host cannot render figures (see the pre-flight check) | the run continues and the CSVs are unaffected; fix the matplotlib/freetype install if you want the plots |
+| `refusing to run: rows ... would mix` | the recorded `--trials`/`--extra` differ from the ones requested | repeat the recorded values, or use a fresh `-o` |
 | No progress, `exp_log.log` still growing | slow phase: `GTG_off` query on 11k–20k nodes, or `-diag` t-SNE | wait, or drop `-diag` |
 | No progress, log silent | DataLoader workers hung | re-run with `--num_workers 0` |
 

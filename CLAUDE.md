@@ -45,24 +45,32 @@ Run the benchmark (one invocation, one or more methods/datasets):
 python app/main.py -gpus 1 -m random entropy coreset badge bald cdal tavaal ll ll_gtg -ds cifar10 -tr 5 -am corr -am_s mixed -am_ts mean -e_s mean
 ```
 Only `-gpus 1` (single-GPU) is currently supported; the DDP path (`train_evaluate/Train_DDP.py`)
-is a work in progress. `-diag` turns on expensive artefacts (t-SNE, affinity plots, per-sample
+is a work in progress. `-dbg_gtg` turns the GTG replicator dynamics' per-iteration state and
+gradient hooks back on (DEBUG, off by default: each log formats a tensor and syncs with the GPU) —
+that is the tool for weights diverging to NaN. `-diag` turns on expensive artefacts (t-SNE, affinity plots, per-sample
 image dumps) — off by default because they can outweigh training cost on a full run. `-am` and
-`-am_ts` accept several values and every GTG method is instantiated once per combination;
-`-am_ts` **defaults to `mean none`**, so each GTG method runs twice unless you pass one value.
+`-am_ts` accept several values and every GTG method is instantiated once per combination
+(`-am_ts` defaults to the single value `mean`). Online GTG methods share one `GTGModule`, so
+`main.py` refuses them when the combinations multiply out to more than one.
 
 Resumable multi-method sweep (recommended for anything beyond a quick check — isolates each
 method in its own process so one crash doesn't kill the run, and skips methods already marked
 done on re-run):
 ```
-python run_sweep.py -o run1 -ds cifar10 --trials 1 -m random     # time one method first
+python run_sweep.py -o timing -ds cifar10 --trials 1 -m random   # time one method first, in its own -o
 python run_sweep.py -o run1 -ds cifar10 --trials 5               # full sweep
 python run_sweep.py -o run1 -ds cifar10 --status                 # progress
 python run_sweep.py -o run1 -ds cifar10 -m gtg --extra -am_ts mean -e_s mean   # --extra must be last
 ```
 Everything after `--extra` is forwarded verbatim to `main.py` (that's how GTG hyperparameters
-reach a sweep). Per-method logs go to `results/<exp>/logs/<dataset>_<method>.log`, success writes
-a `results/<exp>/.done_<dataset>_<method>` marker, and `--force` re-runs finished methods. The
-default method list includes only `lsmlps_gtg` among the online GTG variants.
+reach a sweep). Per-method logs go to `results/<exp>/logs/<dataset>_<method>.log`, and each
+method's `--trials` and `--extra` are recorded in
+`results/<exp>/.sweep_<dataset>_<method>.json`. A method that crashed is re-launched with
+`--existing resume`, so `main.py` skips the trials already complete in `results.csv` and re-runs
+only the partial one; a re-run with a different `--extra`, or with fewer `--trials`, is refused
+(its rows would mix with the recorded ones — use a fresh `-o`). `--force` re-runs a finished
+method and replaces its rows instead of appending. The default method list includes only
+`lsmlps_gtg` among the online GTG variants.
 
 Tests live in `app/tests/` as plain scripts: each inserts `app/` onto `sys.path` itself and its
 `__main__` block runs every `test_*` function. **`pytest` is not in `environment.yml`** — install
@@ -72,9 +80,10 @@ python app/tests/test_gtg_smoke.py         # core GTGModule end-to-end, CPU, sec
 python app/tests/test_gtg_theory.py        # guards the paper's theoretical claims (Prop. 1, redundancy term, etc.)
 python app/tests/test_baseline_fixes.py    # regression tests for BALD/AlphaMix/BADGE/CDAL/TA-VAAL/GCN fixes
 python app/tests/test_utils_fixes.py       # CSV/plotting/reporting-path regressions
+python app/tests/test_pipeline_fixes.py    # test accuracy, TiDAL shared moving_prob, resume, sweep state, make_results guards
 python -c "import sys; sys.path.insert(0, 'app/tests'); import test_gtg_theory as t; t.test_proposition1_is_not_vacuous()"
 ```
-Run the first four before any real sweep or before touching GTG math, baseline query logic, or
+Run the first five before any real sweep or before touching GTG math, baseline query logic, or
 `utils.py` reporting code — they're what stands between a silent regression and a multi-day sweep
 producing numbers that don't match what the paper claims.
 
@@ -88,8 +97,11 @@ for m in random entropy coreset badge bald cdal alphamix uncertaingcn coregcn ll
 Turn a finished sweep's `results.csv` into the paper's table/figure (never hand-transcribe
 numbers; missing method/budget cells are left as `--` rather than invented):
 ```
-python docs/paper/make_results.py results/<exp_path> cifar10 --budgets 2000 4000 6000 8000 10000
+python docs/paper/make_results.py results/<exp_path> cifar10 --trials 5 --budgets 2000 4000 6000 8000 10000
 ```
+`--trials` is required and checked: the script refuses to build a table when a strategy/budget
+cell doesn't have exactly that many rows, when rows are duplicated, or when one table row would
+pool several strategies — each of those silently narrows the confidence interval.
 Build the paper: `cd docs/paper && pdflatex main && bibtex main && pdflatex main && pdflatex main`.
 
 ## Non-obvious constraints
@@ -109,12 +121,13 @@ Build the paper: `cd docs/paper && pdflatex main && bibtex main && pdflatex main
   `smoke_run.py` both satisfy `init_lab_obs == n_top_k_obs == unlab_sample_dim / al_iters`.
 - **One configuration per `-o` when the numbers matter.** Strategy names don't encode `-am_r`,
   `-am_md`, `-am_sl`, `-gtg_iter`, `-gtg_t` or `-bsgtgo`, so runs differing only in those merge
-  rows in `results.csv` (a `-am_r` sweep needs one `-o` per λ). `docs/paper/make_results.py` also pools
-  every GTG config, and `gtg` with `ll_gtg`, into one table row. Re-running a method into an
-  existing `-o` (including `--force`) appends duplicate rows rather than replacing them.
-- **Online GTG methods get exactly one `-am` and one `-am_ts` value.** Their affinity config is
-  set on a shared `GTGModule` when strategies are constructed, so with several values the last
-  combination silently applies to all of them (the `-am_ts` default is two values).
+  rows in `results.csv` (a `-am_r` sweep needs one `-o` per λ). `run_sweep.py` refuses a re-run
+  whose `--extra` differs from the recorded one, and `docs/paper/make_results.py` refuses to pool
+  several strategies into one table row (`gtg` and `ll_gtg` have separate rows), but nothing
+  detects two configurations that produce the *same* strategy name.
+- **Online GTG methods get exactly one `-am` and one `-am_ts` value**, which `main.py` now
+  enforces. Their affinity config is set on a shared `GTGModule` when strategies are constructed,
+  so with several values the last combination would silently apply to all of them.
 - **Payoff-matrix changes go in both `GTG_Cls.py` and `GTG_off.py`.** The GTG tests only exercise
   `GTGModule`, so they won't catch an offline-only regression.
 - **Never run two processes for the same dataset + method from one checkout at once**, including

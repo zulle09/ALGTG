@@ -67,8 +67,11 @@ for m in random entropy coreset badge bald cdal alphamix uncertaingcn coregcn ll
 `make_results.py` turns the benchmark CSV into the table and figure, so no number is ever
 transcribed by hand:
 ```
-python docs/paper/make_results.py results/<exp_path> cifar10 --budgets 2000 4000 6000 8000 10000
+python docs/paper/make_results.py results/<exp_path> cifar10 --trials 5 --budgets 2000 4000 6000 8000 10000
 ```
+`--trials` is required: the script refuses to build anything when a strategy/budget cell doesn't
+have exactly that many rows, when rows are duplicated, or when one table row would pool several
+strategies, since each of those narrows the reported CI.
 It writes `results_cifar10.tex` (booktabs table, best per column in bold), `curve_cifar10.pdf`
 (accuracy vs. budget with CI bands) and `summary_cifar10.txt` (AUBC ranking, for the prose).
 `main.tex` picks the table up automatically via `\IfFileExists`, falling back to a placeholder

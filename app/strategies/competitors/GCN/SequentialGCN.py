@@ -56,8 +56,10 @@ class SequentialGCN(ActiveLearner):
         while len(picked) < k:
             idx = int(torch.argmax(min_dist).item())
             picked.append(idx)
-            # the distance of a point to itself is 0, so a picked centre is never re-picked
             min_dist = torch.minimum(min_dist, torch.cdist(feat_unlab, feat_unlab[idx].unsqueeze(0))[:, 0])
+            # Explicitly retire the chosen point: when the remaining points all sit at distance 0
+            # (collapsed features) argmax would hand back an already-picked index.
+            min_dist[idx] = float('-inf')
         return picked
 
 

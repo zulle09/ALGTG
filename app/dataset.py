@@ -482,7 +482,9 @@ class Cls_Dataset(Dataset):
         
         if bool_train and bool_transform: 
             log_assert(n_classes != -1, 'Invalid n_classes')
-            self.moving_prob = torch.zeros((len(self.ds), n_classes), dtype=torch.float32, device=torch.device('cpu')) # type: ignore  # -> for TiDAL
+            # Shared memory: the Worker updates this in the main process, and forked DataLoader
+            # workers (the Linux default) would otherwise keep reading their stale copy.
+            self.moving_prob = torch.zeros((len(self.ds), n_classes), dtype=torch.float32, device=torch.device('cpu')).share_memory_() # type: ignore  # -> for TiDAL
         
         
         
