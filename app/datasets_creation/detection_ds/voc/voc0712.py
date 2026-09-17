@@ -64,7 +64,7 @@ class VOCAnnotationTransform(object):
             name = obj.find('name').text.lower().strip()
             bbox = obj.find('bndbox')
 
-            pts = ["xmin', 'ymin', 'xmax', 'ymax"]
+            pts = ['xmin', 'ymin', 'xmax', 'ymax']
             bndbox = []
             for i, pt in enumerate(pts):
                 cur_pt = int(bbox.find(pt).text) - 1
@@ -110,7 +110,7 @@ class VOCDetection(data.Dataset):
     def __init__(self, root,
                  image_sets=[('2007', 'trainval'), ('2012', 'trainval')],
                  transform=None, target_transform=VOCAnnotationTransform(),
-                 dataset_name='VOC0712'):
+                 dataset_name='VOC0712', skip_empty=False):
         self.root = root
         self.image_set = image_sets
         self.transform = transform
@@ -123,6 +123,11 @@ class VOCDetection(data.Dataset):
             rootpath: str = osp.join(self.root, 'VOC' + year)
             for line in open(osp.join(rootpath, 'ImageSets', 'Main', name + '.txt')):
                 self.ids.append((rootpath, line.strip()))
+
+        # images whose objects are all 'difficult' have no target, which the augmentation and the prior matching can't handle
+        if skip_empty:
+            self.ids = [img_id for img_id in self.ids
+                        if len(self.target_transform(ET.parse(self._annopath % img_id).getroot(), 1, 1)) > 0]
 
     def __getitem__(self, index: int) -> Tuple[int, torch.Tensor, np.ndarray]:
         im, gt, _, _ = self.pull_item(index)
@@ -143,7 +148,7 @@ class VOCDetection(data.Dataset):
             target = self.target_transform(target, width, height)
 
         if self.transform is not None:
-            target = np.array(target)
+            target = np.array(target, dtype=np.float32).reshape(-1, 5)
             img, boxes, labels = self.transform(img, target[:, :4], target[:, 4])
             # to rgb
             img = img[:, :, (2, 1, 0)]

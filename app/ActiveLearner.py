@@ -1,19 +1,16 @@
 
 from models.BBone_Module import Master_Model
-from datasets_creation.Classification import Cls_Datasets
-from datasets_creation.Detection import Det_Dataset
+from datasets_creation.Detection import Det_Dataset, count_class_observation
 from train_evaluate.Train_DDP import train, train_ddp
-from utils import count_class_observation, plot_cumulative_train_results, set_seeds,\
-    create_class_dir, create_method_res_dir, plot_new_labelled_tsne, save_train_val_curves, write_csv,\
+from utils import plot_cumulative_train_results, set_seeds,\
+    create_class_dir, create_method_res_dir, save_train_val_curves, write_csv,\
     plot_classes_count_iterations, plot_entropy_iterations_classes
 from config import al_params
 
 from torch.utils.data import Subset, DataLoader
-import torch.distributed as dist
 import torch.multiprocessing as mp
-from torchvision.utils import save_image
 import torch
-import numpy as np
+import cv2
 from typing import List, Dict, Any
 import copy
 import os
@@ -35,7 +32,7 @@ class ActiveLearner():
         self.model: Master_Model = self.ct_p["Master_Model"]
         self.model = self.model.to(self.device)
         
-        self.dataset: Cls_Datasets | Det_Dataset = self.ct_p["Dataset"]
+        self.dataset: Det_Dataset = self.ct_p["Dataset"]
         
         self.ds_t_p = self.t_p[self.ct_p["dataset_name"]]
         self.batch_size = self.ds_t_p["batch_size"][self.model.only_module_name]
@@ -60,9 +57,9 @@ class ActiveLearner():
         self.save_labelled_images(self.labelled_indices)
         
         self.count_classes: Dict[int, List[int]] = {}
-        self.count_classes[self.iter * al_params["n_top_k_obs"]] = list(count_class_observation(self.dataset.classes, Subset(self.dataset.train_ds, self.labelled_indices)).values())
+        self.count_classes[self.iter * al_params["n_top_k_obs"]] = list(count_class_observation(self.dataset.classes, self.dataset.unlab_train_ds, self.labelled_indices).values())
         write_csv(
-            filename = f'{self.ct_p["task"]}_count_classes.csv',
+            filename = 'detection_count_classes.csv',
             exp_path = self.ct_p["exp_path"],
             dataset_name = self.ct_p["dataset_name"],
             head = ['method', 'iter', 'lab_obs'] + self.dataset.classes,
@@ -74,42 +71,37 @@ class ActiveLearner():
     def save_labelled_images(self, new_labelled_idxs: List[int]) -> None:
         logger.info(f' => Iteration {self.iter} Method {self.strategy_name} - Saving the new labelled images for further visual analysis...')
         create_class_dir(self.path, self.iter, self.dataset.classes)
-        for idx_top, (_, img, gt) in enumerate(Subset(self.dataset.unlab_train_ds, new_labelled_idxs)): # type: ignore
-            if self.ct_p["task"] != 'clf': 
-                unique_labs = np.unique(np.array([labs[-1] for labs in gt]))
-                for lab in unique_labs: 
-                    save_image(img, f'{self.path}/new_labelled_images/{self.iter}/{self.dataset.classes[int(lab)]}/{idx_top}.png')
-            else:
-                save_image(img, f'{self.path}/new_labelled_images/{self.iter}/{self.dataset.classes[gt]}/{idx_top}.png')
+        for idx_top, idx in enumerate(new_labelled_idxs):
+            # the original image, since the dataset returns resized and mean-subtracted images
+            img = self.dataset.unlab_train_ds.pull_image(idx)
+            _, gt = self.dataset.unlab_train_ds.pull_anno(idx)
+            for lab in {int(obj[-1]) for obj in gt}:
+                cv2.imwrite(f'{self.path}/new_labelled_images/{self.iter}/{self.dataset.classes[lab]}/{idx_top}.png', img)
         logger.info(' DONE\n')
         
         
     
     def get_rand_unlab_sample(self) -> None:
-        if self.ct_p["task"] == 'clf':
-            # set seed for reproducibility            
-            seed = self.dataset.dataset_id * (self.ct_p["trial"] * al_params["al_iters"] + (self.iter - 1))
-            set_seeds(seed)
-            
-            rand_perm = torch.randperm(len(self.unlabelled_indices)).tolist()
-            # it has the indices of the unlabelled sample
-            self.rand_unlab_sample = [self.unlabelled_indices[idx] for idx in rand_perm[:al_params["unlab_sample_dim"]]]
-            
-            logger.info(f' SEED: {seed} - Last 10 permuted indices are: {rand_perm[-10:]}')
-            
-            #reset the original seed
-            set_seeds()
-            
-            if self.ct_p["temp_unlab_pool"]:
-                # removing the whole observation sample fromt the unlabelled indices list
-                for idx in self.rand_unlab_sample: self.unlabelled_indices.remove(idx) # - 10000
-            
+        # set seed for reproducibility            
+        seed = self.dataset.dataset_id * (self.ct_p["trial"] * al_params["al_iters"] + (self.iter - 1))
+        set_seeds(seed)
         
-        else: self.rand_unlab_sample = self.unlabelled_indices
+        rand_perm = torch.randperm(len(self.unlabelled_indices)).tolist()
+        # it has the indices of the unlabelled sample
+        self.rand_unlab_sample = [self.unlabelled_indices[idx] for idx in rand_perm[:al_params["unlab_sample_dim"]]]
+        
+        logger.info(f' SEED: {seed} - Last 10 permuted indices are: {rand_perm[-10:]}')
+        
+        #reset the original seed
+        set_seeds()
+        
+        if self.ct_p["temp_unlab_pool"]:
+            # removing the whole observation sample fromt the unlabelled indices list
+            for idx in self.rand_unlab_sample: self.unlabelled_indices.remove(idx) # - 10000
             
     
     def load_best_checkpoint(self):
-        if dist.is_available():
+        if torch.cuda.is_available():
             if self.world_size > 1: device = 'cuda:0'
             else: device = 'cuda' 
         else: device = 'cpu'
@@ -147,7 +139,7 @@ class ActiveLearner():
                             dict_to_modify["module_out"], 
                             self.model(images, mode='module_out',
                                         labels=labels.to(self.device) if self.model.only_module_name == 'GTGModule'
-                                        else None, iteration=self.iter).cpu().squeeze()
+                                        else None, iteration=self.iter).cpu().view(len(images), -1).squeeze(1)
                         ), dim=0)    
                     else:
                         raise AttributeError("Can't get the module_out if there is no additional module specified")    
@@ -159,42 +151,6 @@ class ActiveLearner():
 
     
     
-    def save_tsne(self, idxs_new_labels: List[int], d_labels: Dict[str, int], al_iter: int, gtg_result_prediction = None) -> None:
-        # plot the tsne graph for each iteration
-        
-        logger.info(' => Saving the TSNE embeddings plot with labelled, unlabelled and new labelled observations')
-        
-        dl_dict = dict(batch_size=self.batch_size, shuffle=False)
-        unlab_train_dl = DataLoader(Subset(self.dataset.unlab_train_ds, self.rand_unlab_sample), **dl_dict)
-        lab_train_dl = DataLoader(Subset(self.dataset.unlab_train_ds, self.labelled_indices), **dl_dict)
-        
-        lab_embedds_dict = {
-            'embedds': torch.empty((0, self.model.backbone.get_embedding_dim()), dtype=torch.float32, device=torch.device('cpu')),
-            'labels': torch.empty(0, dtype=torch.int8, device=torch.device('cpu'))
-        }
-        unlab_embedds_dict = {
-            'embedds': torch.empty((0, self.model.backbone.get_embedding_dim()), dtype=torch.float32, device=torch.device('cpu')),
-            'labels': torch.empty(0, dtype=torch.int8, device=torch.device('cpu'))
-        }
-        self.load_best_checkpoint()
-        logger.info(' Getting the embeddings...')
-        self.get_embeddings(lab_train_dl, lab_embedds_dict, embedds2cpu=True)
-        self.get_embeddings(unlab_train_dl, unlab_embedds_dict, embedds2cpu=True)
-        
-
-        logger.info(' Plotting...')
-        plot_new_labelled_tsne(
-            lab_embedds_dict, unlab_embedds_dict,
-            al_iter, self.strategy_name,
-            self.ct_p["dataset_name"], idxs_new_labels, self.dataset.classes, 
-            self.ct_p["exp_path"], self.ct_p["trial"], d_labels,
-            gtg_result_prediction
-        )
-        
-        logger.info(' DONE\n')
-        
-        
-        
     def train_evaluate_save(self, lab_obs: int, iter: int, results_format: Dict[str, Dict[str, List[float]]]) -> Dict[str, Any]:
         
         test_res_keys = list(results_format["test"].keys())
@@ -245,7 +201,7 @@ class ActiveLearner():
         logger.info(f'TESTING RESULTS -> {iter_test_results}')
         
         write_csv(
-            filename = f'{self.ct_p["task"]}_results.csv',
+            filename = 'detection_results.csv',
             exp_path = self.ct_p["exp_path"],
             dataset_name = self.ct_p["dataset_name"],
             head = ['method', 'iter', 'lab_obs'] + test_res_keys,
@@ -328,19 +284,12 @@ class ActiveLearner():
             logger.info(' START QUERY PROCESS\n')
             
             # run method query strategy
-            idxs_new_labels, topk_idx_obs = self.query( # type: ignore
+            _, topk_idx_obs = self.query( # type: ignore
                 Subset(self.dataset.unlab_train_ds, self.rand_unlab_sample), al_params["n_top_k_obs"]
             )
             
-            d_labels = count_class_observation(self.dataset.classes, self.dataset.train_ds, topk_idx_obs)
-            logger.info(f' Number of observations per class added to the labelled set:\n {d_labels}\n')
-            
-            # Saving the tsne embeddings plot
-            if 'GTG_off' in self.method_name:
-                # if we are performing GTG Offline plot also the GTG predictions in the TSNE plot 
-                self.save_tsne(idxs_new_labels, d_labels, self.iter, self.gtg_result_prediction) # type: ignore
-            
-            else: self.save_tsne(idxs_new_labels, d_labels, self.iter)
+            d_labels = count_class_observation(self.dataset.classes, self.dataset.unlab_train_ds, topk_idx_obs)
+            logger.info(f' Number of images per class added to the labelled set:\n {d_labels}\n')
 
             # modify the datasets and dataloader and plot the tsne
             self.update_sets(topk_idx_obs)
@@ -352,7 +301,7 @@ class ActiveLearner():
 
         
             write_csv(
-                filename = f'{self.ct_p["task"]}_count_classes.csv',
+                filename = 'detection_count_classes.csv',
                 exp_path = self.ct_p["exp_path"],
                 dataset_name = self.ct_p["dataset_name"],
                 head = ['method', 'iter', 'lab_obs'] + self.dataset.classes,

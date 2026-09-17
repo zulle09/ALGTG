@@ -2,9 +2,7 @@
 import torch
 import torch.nn as nn
 
-from models.backbones.ResNet18 import ResNet
-#from models.backbones.ssd_pytorch.SSD import SSD
-from models.backbones.VGG import VGG
+from models.backbones.ssd_pytorch.SSD import SSD
 
 from models.modules.GTG_Cls import GTGModule
 from models.modules.LossNet import LossNet
@@ -14,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class Master_Model(nn.Module):
-    def __init__(self, backbone: ResNet | VGG, added_module: LossNet | GTGModule | None, dataset_name: str) -> None:
+    def __init__(self, backbone: SSD, added_module: LossNet | GTGModule | None, dataset_name: str) -> None:
         
         super(Master_Model, self).__init__()
         
@@ -41,9 +39,9 @@ class Master_Model(nn.Module):
             if self.training:
                 outs, embedds = self.backbone(x)
                 
-                if torch.any(torch.isnan(embedds)): print(embedds)
-                assert not torch.any(torch.isnan(embedds)), 'embedding is nan'
-                assert torch.std(embedds) > 0, 'std is zero or negative'
+                if embedds is not None:
+                    assert not torch.any(torch.isnan(embedds)), 'embedding is nan'
+                    assert torch.std(embedds) > 0, 'std is zero or negative'
 
                 if self.added_module != None:
                     features = self.backbone.get_features()

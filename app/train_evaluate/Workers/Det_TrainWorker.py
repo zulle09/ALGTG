@@ -32,11 +32,10 @@ class Det_TrainWorker():
         self.epoch_size: int = self.t_p["epoch_size"]
         self.dataset: Det_Dataset = self.ct_p["Dataset"]
         
-        self.LL = params["LL"]
         self.world_size: int = world_size
         self.wandb_run = params["wandb_p"] if 'wandb_p' in params else None
         
-        self.model: Master_Model | DDP = params["ct_p"]["Master_Model"]
+        self.model: Master_Model | DDP = self.ct_p["Model_train"] if self.world_size > 1 else self.ct_p["Master_Model"]
         
         self.strategy_name: str = params["strategy_name"]
         
@@ -49,7 +48,8 @@ class Det_TrainWorker():
 
         self.best_check_filename = f'app/checkpoints/{self.ct_p["dataset_name"]}'
         self.init_check_filename = f'{self.best_check_filename}/{self.model.module.name if self.world_size > 1 else self.model.name}_init.pth.tar'
-        self.check_best_path = f'{self.best_check_filename}/best_{self.strategy_name}_{self.device}.pth.tar'
+        # same name ActiveLearner.load_best_checkpoint reads
+        self.check_best_path = f'{self.best_check_filename}/{self.strategy_name}_{self.device}.pth.tar'
         
         if self.iter > 1: 
             self.__load_checkpoint(self.check_best_path)
@@ -60,10 +60,8 @@ class Det_TrainWorker():
         logger.info(' DONE')
         
         # set device for priors
-        if self.world_size > 1: self.model.module.backbone.set_device_priors(self.device) 
-        else: self.model.backbone.set_device_priors(self.device)
-        
-        self.__load_checkpoint(self.init_check_filename)
+        self.backbone = self.model.module.backbone if self.world_size > 1 else self.model.backbone
+        self.backbone.set_device_priors(self.device)
     
     
     def init_opt_sched(self):
@@ -91,14 +89,8 @@ class Det_TrainWorker():
         loss_l = torch.mean(loss_l)
         loss_c = torch.mean(loss_c)
         
-        if module_out == None:
+        if module_out is None:
             return original_loss, (loss_l, loss_c), torch.tensor(0.)
-        
-        elif len(module_out) == 2:
-            quantity_loss, mask = module_out
-            loss = target_loss * mask + quantity_loss
-
-            return loss, (loss_l, loss_c), quantity_loss
         else:
             pred_loss = self.ll_loss_fn(module_out, target_loss)
             loss = original_loss + pred_loss
@@ -125,23 +117,6 @@ class Det_TrainWorker():
         batch_iterator = iter(cycle(self.train_dl))
         
         for iteration in range(0, self.t_p["max_iter"]):
-            # reset epoch loss counters
-            if iteration != 0 and (iteration % self.epoch_size == 0):
-                
-                self.__save_checkpoint(self.check_best_path)
-                self.scheduler.step()
-                    
-                logger.info(f'GPU: {self.device} ||| Epoch {epoch} | Iteration {iteration} -> train_loss: {train_loss / self.epoch_size}\tloc_loss: {loc_loss / self.epoch_size}\tconf_loss: {conf_loss / self.epoch_size}\ttrain_pred_loss: {train_pred_loss / self.epoch_size}')
-                                
-                for pos, metric in zip(range(results.shape[0]), [train_loss / self.epoch_size,
-                                                                 loc_loss / self.epoch_size, 
-                                                                 conf_loss / self.epoch_size, 
-                                                                 train_pred_loss / self.epoch_size]): 
-                    if metric != 0.0: results[pos][epoch] = metric
-                
-                loc_loss, conf_loss = .0, .0
-                train_loss, train_pred_loss = .0, .0
-                epoch += 1
 
             if iteration in self.t_p["lr_steps"]:
                 step_index += 1
@@ -154,7 +129,7 @@ class Det_TrainWorker():
             
             self.optimizer.zero_grad()
             
-            outputs, _, module_out = self.model(images, labels)
+            outputs, module_out = self.model(images, labels)
             
             loss, (loss_l, loss_c), module_loss = self.compute_losses(
                 module_out=module_out, outputs=outputs, labels=labels
@@ -179,6 +154,25 @@ class Det_TrainWorker():
                     "train_pred_loss": module_loss.item(),
                 })
             
+            # end of epoch: record the mean losses, checkpoint and reset the counters
+            if (iteration + 1) % self.epoch_size == 0:
+                
+                self.__save_checkpoint(self.check_best_path)
+                self.scheduler.step()
+                    
+                logger.info(f'GPU: {self.device} ||| Epoch {epoch} | Iteration {iteration + 1} -> train_loss: {train_loss / self.epoch_size}\tloc_loss: {loc_loss / self.epoch_size}\tconf_loss: {conf_loss / self.epoch_size}\ttrain_pred_loss: {train_pred_loss / self.epoch_size}')
+                                
+                for pos, metric in zip(range(results.shape[0]), [train_loss / self.epoch_size,
+                                                                 loc_loss / self.epoch_size, 
+                                                                 conf_loss / self.epoch_size, 
+                                                                 train_pred_loss / self.epoch_size]): 
+                    if metric != 0.0: results[pos][epoch] = metric
+                
+                loc_loss, conf_loss = .0, .0
+                train_loss, train_pred_loss = .0, .0
+                epoch += 1
+                if self.world_size > 1: self.train_dl.sampler.set_epoch(epoch) # type: ignore
+            
         self.__load_checkpoint(self.check_best_path)
 
         return results
@@ -187,8 +181,7 @@ class Det_TrainWorker():
 
     def test(self) -> torch.Tensor:
         
-        if self.world_size > 1: self.model.module.backbone.change_phase() 
-        else: self.model.backbone.change_phase()
+        self.backbone.change_phase() # -> test phase, the SSD outputs the detections
         
         self.model.eval()
 
@@ -197,7 +190,7 @@ class Det_TrainWorker():
         
         # all detections are collected into:
         all_boxes: List[List[np.ndarray | None]] = [[ None for _ in range(num_images)] for _ in range(self.dataset.n_classes)]
-        output_dir = f'results/{self.ct_p["timestamp"]}/{self.ct_p["dataset_name"]}/{self.ct_p["trial"]}/{self.strategy_name}/test'
+        output_dir = f'results/{self.ct_p["exp_path"]}/{self.ct_p["dataset_name"]}/{self.ct_p["trial"]}/{self.strategy_name}/test'
         create_directory(output_dir)        
         det_file = os.path.join(output_dir, f'detections_{self.device}.pkl')
         
@@ -206,7 +199,7 @@ class Det_TrainWorker():
             for i in range(num_images):
                 im, _, h, w = self.test_dl.dataset.pull_item(i) # type: ignore
                 x = im.unsqueeze(0).to(self.device, non_blocking=True)
-                detection, _, _ = self.model(x, None) ############################## -> None as labels 
+                detection = self.model(x, mode='outs')
                 
                 # skip j = 0, because it's the background class
                 for j in range(1, detection.size(1)):
@@ -229,9 +222,12 @@ class Det_TrainWorker():
         logger.info(f'GPU: {self.device} |||  DONE\n')
 
         logger.info(f'GPU: {self.device} |||  => Evaluating detections...')
-        write_voc_results_file(all_boxes, self.test_dl.dataset, self.dataset.dataset_path, self.dataset.classes)
-        mAP = do_python_eval(self.dataset.classes, self.dataset.dataset_path, output_dir)
+        results_prefix = str(self.device).replace(':', '_')
+        write_voc_results_file(all_boxes, self.test_dl.dataset, self.dataset.classes, output_dir, results_prefix)
+        mAP = do_python_eval(self.dataset.classes, self.dataset.dataset_path, output_dir, results_prefix)
         logger.info(f'GPU: {self.device} |||  DONE\n')
+        
+        self.backbone.change_phase() # -> back to the train phase for the query and the next AL iteration
         
         torch.cuda.empty_cache()
 

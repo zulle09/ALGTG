@@ -3,6 +3,7 @@ import torch
 from torch.utils.data import DataLoader, Subset
 
 from ActiveLearner import ActiveLearner
+from datasets_creation.Detection import detection_collate
 
 from typing import Dict, Any, List, Tuple
 
@@ -20,7 +21,7 @@ class LearningLoss(ActiveLearner):
     def query(self, sample_unlab_subset: Subset, n_top_k_obs: int) -> Tuple[List[int], List[int]]:
         self.unlab_train_dl = DataLoader(
             sample_unlab_subset,
-            batch_size=self.batch_size, shuffle=False, pin_memory=True
+            batch_size=self.batch_size, shuffle=False, pin_memory=True, collate_fn=detection_collate
         )
                 
         logger.info(' => Evaluating unlabelled observations')

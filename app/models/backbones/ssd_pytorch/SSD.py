@@ -11,7 +11,8 @@ import torch.nn.functional as F
 
 from utils import init_weights_apply
 
-from .ssd_layers import *
+from .ssd_layers.functions import Detect, PriorBox
+from .ssd_layers.modules import L2Norm
 
 import logging
 logger = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ class SSD(nn.Module):
         self.loc = nn.ModuleList(head[0])
         self.conf = nn.ModuleList(head[1])
         
-        vgg_weights = torch.load('./vgg16_reducedfc.pth')
+        vgg_weights = torch.load(os.path.join(os.path.dirname(__file__), 'vgg16_reducedfc.pth'))
         self.vgg.load_state_dict(vgg_weights)
         self.extras.apply(init_weights_apply)
         self.loc.apply(init_weights_apply)
@@ -62,12 +63,12 @@ class SSD(nn.Module):
 
         if phase == 'test':
             self.softmax = nn.Softmax(dim=-1)
-            self.detect = Detect()
+            self.detect = Detect(num_classes, 0, 200, 0.01, 0.45)
             
     def change_phase(self):
         if self.phase == 'train':
             self.softmax = nn.Softmax(dim=-1)
-            self.detect = Detect()
+            self.detect = Detect(self.num_classes, 0, 200, 0.01, 0.45)
             self.phase = 'test'
         else:
             del self.softmax
@@ -77,7 +78,7 @@ class SSD(nn.Module):
     # IF IT GIVES ERROR REGARDING THE DEVICE FOR PRIOR THIS IS THE PROBLEM
     def set_device_priors(self, gpu_id: torch.device): 
         self.device = gpu_id
-        self.priors.to(self.device)
+        self.priors = self.priors.to(self.device)
             
 
     def forward(self, x):
@@ -132,11 +133,11 @@ class SSD(nn.Module):
         loc = torch.cat([o.view(o.size(0), -1) for o in loc], 1)
         conf = torch.cat([o.view(o.size(0), -1) for o in conf], 1)
         if self.phase == "test":
-            output = self.detect.apply(self.num_classes, 0, 200, 0.01, 0.45,
-                                        loc.view(loc.size(0), -1, 4),  # loc preds
-                                        self.softmax(conf.view(conf.size(0), -1, self.num_classes)),  # conf preds
-                                        self.priors.to(x.dtype).to(self.device)  # default boxes
-                                      )
+            output = self.detect(
+                loc.view(loc.size(0), -1, 4),  # loc preds
+                self.softmax(conf.view(conf.size(0), -1, self.num_classes)),  # conf preds
+                self.priors.to(dtype=x.dtype, device=x.device)  # default boxes
+            )
         else:
             output = (
                 loc.view(loc.size(0), -1, 4),

@@ -1,7 +1,6 @@
 
 import torch
 from torch.backends import cudnn
-from torch.utils.data import Dataset
 import torch.nn as nn
 import torch.nn.init as init
 
@@ -26,11 +25,6 @@ from typing import List, Dict, Any, Tuple
 import logging
 logger = logging.getLogger(__name__)
 
-
-
-def accuracy_score(outputs: torch.Tensor, labels: torch.Tensor) -> float:
-    outputs_class = torch.argmax(torch.softmax(outputs, dim=1), dim=1)
-    return (outputs_class == labels).sum().item()/len(outputs)
 
 
 def entropy(tensor: torch.Tensor, dim=1) -> torch.Tensor:
@@ -258,12 +252,12 @@ def plot_gtg_entropy_tensor(tensor: torch.Tensor, topk: List[int], lab_unlabels:
 
 
 
-def plot_res_std_mean(task: str, exp_path: str, dataset_name: str) -> None:
-    df = pd.read_csv(f'results/{exp_path}/{dataset_name}/{task}_results.csv')
+def plot_res_std_mean(exp_path: str, dataset_name: str) -> None:
+    df = pd.read_csv(f'results/{exp_path}/{dataset_name}/detection_results.csv')
 
     df_grouped = (
         df[
-            ['method', 'lab_obs', 'test_accuracy' if task == 'clf' else 'test_map']
+            ['method', 'lab_obs', 'test_map']
         ].groupby(['method', 'lab_obs']).agg(['mean', 'std', 'count'])
     )
     df_grouped = df_grouped.droplevel(axis=1, level=0).reset_index()
@@ -276,7 +270,7 @@ def plot_res_std_mean(task: str, exp_path: str, dataset_name: str) -> None:
     shapes = ['o', 's', '^', 'D', 'v', 'o', 's', '^', 'D', 'v', 'o', 's', '^', 'D', 'v', 'o', 's', '^', 'D', 'v']
 
     df_grouped = df_grouped.drop(columns=["ci"])
-    df_grouped.to_csv(f'results/{exp_path}/{dataset_name}/mean_std_{task}_results.csv', index=False)
+    df_grouped.to_csv(f'results/{exp_path}/{dataset_name}/mean_std_detection_results.csv', index=False)
 
     lines_handles = []
     palette = get_palette(len(methods))
@@ -293,7 +287,7 @@ def plot_res_std_mean(task: str, exp_path: str, dataset_name: str) -> None:
         
 
     plt.xlabel('labelled Observations', fontsize = 15)
-    plt.ylabel('Test Accuracy' if task == 'clf' else 'Test mAP', fontsize = 15)
+    plt.ylabel('Test mAP', fontsize = 15)
     plt.title(f'{dataset_name} results', fontsize = 30)
     plt.legend(handles=lines_handles)
     plt.grid(True)
@@ -356,82 +350,6 @@ def plot_tsne_A(A: Tuple[torch.Tensor, torch.Tensor], labels: Tuple[torch.Tensor
     
     
     
-def plot_new_labelled_tsne(lab: Dict[str, torch.Tensor], unlab: Dict[str, torch.Tensor],
-                           iter: int, method: str, ds_name: str, idxs_new_labels: List[int], 
-                           classes: List[str], exp_path: str, samp_iter: int, d_labels: Dict[str, int],
-                           gtg_result_prediction=None):
-    
-    tsne = TSNE().fit_transform(np.vstack((lab["embedds"].numpy(), unlab["embedds"].numpy())))
-    tsne_lab, tsne_unlab = tsne[:len(lab["embedds"]), :], tsne[len(lab["embedds"]):, :]
-    
-    x_lab, y_lab = tsne_lab[:, 0], tsne_lab[:, 1]
-    x_unlab, y_unlab = tsne_unlab[:, 0], tsne_unlab[:, 1]
-    
-    fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(25, 14))
-    
-    if isinstance(gtg_result_prediction, np.ndarray):
-        
-        idxs_unlab_again = [id for id in range(len(gtg_result_prediction)) if id not in idxs_new_labels]
-        
-        true_unlab = np.array(gtg_result_prediction[idxs_unlab_again]) == 1
-        false_unlab = np.array(gtg_result_prediction[idxs_unlab_again]) == 0
-        true_new_lab = np.array(gtg_result_prediction[idxs_new_labels]) == 1
-        false_new_lab = np.array(gtg_result_prediction[idxs_new_labels]) == 0
-        
-        sns.scatterplot(x=x_unlab[idxs_unlab_again][true_unlab], y=y_unlab[idxs_unlab_again][true_unlab], 
-                        color='blue', s=20, ax=axes[0], marker='o', label='True Unlabelled Obs')
-        
-        sns.scatterplot(x=x_unlab[idxs_unlab_again][false_unlab], y=y_unlab[idxs_unlab_again][false_unlab], 
-                        color='blue', s=20, ax=axes[0], marker='X', label='False Unlabelled Obs')
-        
-        sns.scatterplot(x=x_lab, y=y_lab, color='orange', s=20, ax=axes[0], marker='o', label='Old Labeled Obs')
-        
-        sns.scatterplot(x=x_unlab[idxs_new_labels][true_new_lab], y=y_unlab[idxs_new_labels][true_new_lab], 
-                        s=20, color='red', ax=axes[0], marker='o', label='True New-Labelled Obs')
-        
-        sns.scatterplot(x=x_unlab[idxs_new_labels][false_new_lab], y=y_unlab[idxs_new_labels][false_new_lab], 
-                        s=20, color='red', ax=axes[0], marker='X', label='False New-Labelled Obs')
-        
-    else:
-        
-        sns.scatterplot(x=x_unlab, y=y_unlab, label='unlabelled', color='blue', s=20, ax=axes[0], marker='o')
-        sns.scatterplot(x=x_lab, y=y_lab, label='labelled', color='orange', s=20, ax=axes[0], marker='o')
-        sns.scatterplot(x=x_unlab[idxs_new_labels], y=y_unlab[idxs_new_labels], label='new_labelled', 
-                        s=20, color='red', ax=axes[0], marker='o')
-    
-    axes[0].set_title('TSNE -- Labelled - Unlabelled - NewLabelled', fontsize=15)
-    
-    handles, labels = axes[0].get_legend_handles_labels()
-    unique_labels = dict(zip(labels, handles))
-    axes[0].legend(unique_labels.values(), unique_labels.keys(), markerscale=1)
-    
-    sns_p = sns.scatterplot(x=np.hstack((x_lab, x_unlab)), y=np.hstack((y_lab, y_unlab)), 
-                            hue=[classes[l] for l in np.hstack((lab["labels"], unlab["labels"]))], s=20, ax=axes[1])
-        
-    axes[1].set_title('TSNE - Classes', fontsize=15)
-    
-    if len(classes) <= 10: 
-        fig.text(0.5, 0.05, f'New Labelled Observations: {d_labels}', ha='center', va='center', fontdict={'size': 17})
-    else: 
-        sns_p.legend([], [], frameon=False)
-    
-    plt.suptitle(f'TSNE Plot - Iteration {iter}', fontsize=30)
-    plt.savefig(f'results/{exp_path}/{ds_name}/{samp_iter}/{method}/tsne_plots/{iter}.png')
-
-    
-    
-    
-def count_class_observation(classes: List[str], dataset: Dataset, topk_idx_obs=None) -> Dict[str, int]:
-    if topk_idx_obs == None: labels = [lab for _, _ ,lab in dataset] if len(dataset[0]) == 3 else [lab for _, _ ,lab, _ in dataset] # -> for TiDAL
-    else: labels = [dataset[k][2] for k in topk_idx_obs]
-    
-    d_labels = {}
-    for cls in classes: d_labels[cls] = 0
-    keys_d_labels = list(d_labels.keys())
-    for l in labels: d_labels[keys_d_labels[l]] += 1
-    return d_labels
-
-
 def cycle(iterable):
     while True:
         for x in iterable: yield x
@@ -457,11 +375,10 @@ def log_assert(condition: bool | torch.Tensor, message: str):
         raise err
     
     
-def save_yamal(common_training_params, task_params, al_params, gtg_params, exp_path, dataset_name) -> None:
+def save_yamal(common_training_params, task_params, al_params, exp_path, dataset_name) -> None:
     yaml_dict = copy.deepcopy(common_training_params)
     yaml_dict.update(task_params)
     yaml_dict.update(al_params)
-    yaml_dict.update(gtg_params)
     with open(f'results/{exp_path}/{dataset_name}/yamal_conf.yamal', 'w') as file: yaml.dump(yaml_dict, file)            
     
 

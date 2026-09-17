@@ -9,7 +9,7 @@ from config import al_params
 
 from config import det_datasets, voc_config
 
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 import logging
 logger = logging.getLogger(__name__)
@@ -33,11 +33,14 @@ def get_voc_data(dataset_path:str) -> Tuple[VOCDetection, VOCDetection, VOCDetec
     datasets.VOCDetection(root=dataset_path, year='2007', image_set='test', download=True)
 
     
+    # lab_train and unlab_train must hold the same ids in the same order, since the AL indices are shared between them
     lab_train = VOCDetection(root=f'{dataset_path}/VOCdevkit',
-                                    transform=SSDAugmentation(voc_config["min_dim"], voc_means))
+                                    transform=SSDAugmentation(voc_config["min_dim"], voc_means),
+                                    skip_empty=True)
     unlab_train = VOCDetection(root=f'{dataset_path}/VOCdevkit',
                                         transform=BaseTransform(300, voc_means),
-                                        target_transform=VOCAnnotationTransform())
+                                        target_transform=VOCAnnotationTransform(),
+                                        skip_empty=True)
     test = VOCDetection(root=f'{dataset_path}/VOCdevkit',
                                    image_sets=[('2007', 'test')],
                                    transform=BaseTransform(300, voc_means),
@@ -65,6 +68,16 @@ def detection_collate(batch):
         imgs.append(sample[1])
         targets.append(torch.FloatTensor(sample[2]))
     return index, torch.stack(imgs, 0), targets
+
+
+
+def count_class_observation(classes: List[str], dataset: VOCDetection, indices: List[int]) -> Dict[str, int]:
+    # number of images containing at least one object of each class, read from the annotations only
+    d_labels = {cls: 0 for cls in classes}
+    for idx in indices:
+        _, gt = dataset.pull_anno(idx)
+        for label in {int(obj[-1]) for obj in gt}: d_labels[classes[label]] += 1
+    return d_labels
 
 
 

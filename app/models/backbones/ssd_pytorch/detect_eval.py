@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 
-def do_python_eval(voc_classes, data_path, output_dir='output', use_07=True):
+def do_python_eval(voc_classes, data_path, output_dir, results_prefix, use_07=True):
     cachedir = os.path.join(data_path, 'VOC2007', 'annotations_cache')
     annopath = os.path.join(data_path, 'VOC2007', 'Annotations', '%s.xml')
     imgsetpath = os.path.join(data_path, 'VOC2007', 'ImageSets', 'Main', 'test.txt')
@@ -27,16 +27,15 @@ def do_python_eval(voc_classes, data_path, output_dir='output', use_07=True):
     # The PASCAL VOC metric changed in 2010
     use_07_metric = use_07
     logger.info('VOC07 metric? ' + ('Yes' if use_07_metric else 'No'))
-    if not os.path.isdir(output_dir):
-        os.mkdir(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
     for _, cls in enumerate(voc_classes):
-        filename = get_voc_results_file_template(data_path, 'test', cls)
+        filename = get_voc_results_file_template(output_dir, results_prefix, cls)
         rec, prec, ap = voc_eval(
             filename, annopath, imgsetpath, cls, cachedir,
             ovthresh=0.5, use_07_metric=use_07_metric)
         aps += [ap]
         logger.info('AP for {} = {:.4f}'.format(cls, ap))
-        with open(os.path.join(output_dir, cls + '_pr.pkl'), 'wb') as f:
+        with open(os.path.join(output_dir, f'{results_prefix}_{cls}_pr.pkl'), 'wb') as f:
             pickle.dump({'rec': rec, 'prec': prec, 'ap': ap}, f)
     print_results(aps)
     return np.mean(aps)
@@ -172,9 +171,10 @@ def voc_eval(detpath,
         prec = tp / np.maximum(tp + fp, np.finfo(np.float64).eps)
         ap = voc_ap(rec, prec, use_07_metric)
     else:
-        rec = -1.
-        prec = -1.
-        ap = -1.
+        # no detections for this class: nothing is recalled, so AP is 0 (not -1, which would drag the mAP down)
+        rec = np.zeros(1)
+        prec = np.zeros(1)
+        ap = 0.
 
     return rec, prec, ap
 
@@ -246,19 +246,14 @@ def voc_ap(rec, prec, use_07_metric=True):
     return ap
 
 
-def write_voc_results_file(all_boxes, dataset, data_path, voc_classes):
+def write_voc_results_file(all_boxes, dataset, voc_classes, output_dir, results_prefix):
     for cls_ind, cls in enumerate(voc_classes):
         logger.info('Writing {:s} VOC results file'.format(cls))
-        filename = get_voc_results_file_template(data_path, 'test', cls)
+        filename = get_voc_results_file_template(output_dir, results_prefix, cls)
         with open(filename, 'wt') as f:
             for im_ind, index in enumerate(dataset.ids):
-                print(type(all_boxes[cls_ind+1][im_ind]))
-                if(isinstance(all_boxes[cls_ind+1][im_ind], np.ndarray)):
-                    print(len(all_boxes[cls_ind+1][im_ind]))
                 dets = all_boxes[cls_ind+1][im_ind]
-                #if dets == []:
-                #if dets == None or dets.size == 0:
-                if dets.size == 0: continue
+                if dets is None or dets.size == 0: continue
                 # the VOCdevkit expects 1-based indices
                 for k in range(dets.shape[0]):
                     f.write('{:s} {:.3f} {:.1f} {:.1f} {:.1f} {:.1f}\n'.
@@ -267,11 +262,10 @@ def write_voc_results_file(all_boxes, dataset, data_path, voc_classes):
                                    dets[k, 2] + 1, dets[k, 3] + 1))
 
 
-def get_voc_results_file_template(data_path, image_set, cls):
-    devkit_path = data_path + 'VOC2007'
-    # VOCdevkit/VOC2007/results/det_test_aeroplane.txt
-    filename = 'det_' + image_set + '_%s.txt' % (cls)
-    filedir = os.path.join(devkit_path, '../results')
+def get_voc_results_file_template(output_dir, results_prefix, cls):
+    # <output_dir>/results/<results_prefix>_det_test_aeroplane.txt, one set per strategy and device
+    filename = f'{results_prefix}_det_test_{cls}.txt'
+    filedir = os.path.join(output_dir, 'results')
     if not os.path.exists(filedir):
         os.makedirs(filedir)
     path = os.path.join(filedir, filename)
