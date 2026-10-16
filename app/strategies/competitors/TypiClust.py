@@ -66,14 +66,13 @@
 # degenerate clusterings (see typiclust_select).
 
 import numpy as np
-from sklearn.cluster import KMeans, MiniBatchKMeans
 from sklearn.neighbors import NearestNeighbors
 from threadpoolctl import threadpool_limits
 from torch.utils.data import Subset
 
 from ActiveLearner import ActiveLearner
 from competitor_config import competitor_params
-from strategies.competitors.common import FeatureSourceMixin, check_selection, derive_rng
+from strategies.competitors.common import FeatureSourceMixin, check_selection, cluster_features, derive_rng
 
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -99,16 +98,6 @@ def typicality(features: np.ndarray, k_nn: int) -> np.ndarray:
     distances, _ = neighbours.kneighbors(features)
     # column 0 is the point itself
     return 1.0 / (distances[:, 1:].mean(axis=1) + 1e-5)
-
-
-def cluster_features(features: np.ndarray, n_clusters: int, seed: int, minibatch_threshold: int, minibatch_size: int) -> np.ndarray:
-    """K-means as in the paper (App. F.1): the exact algorithm up to `minibatch_threshold` clusters,
-    mini-batch k-means above it."""
-    if n_clusters <= minibatch_threshold:
-        model = KMeans(n_clusters=n_clusters, random_state=seed)
-    else:
-        model = MiniBatchKMeans(n_clusters=n_clusters, batch_size=minibatch_size, random_state=seed)
-    return model.fit_predict(features)
 
 
 def _select_dal(

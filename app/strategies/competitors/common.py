@@ -3,6 +3,7 @@ import zlib
 
 import numpy as np
 import torch
+from sklearn.cluster import KMeans, MiniBatchKMeans
 from torch.utils.data import DataLoader, Subset
 
 from typing import Dict, List, Sequence, Tuple
@@ -39,6 +40,16 @@ def check_selection(selected: Sequence[int], n_candidates: int, budget: int) -> 
     if picked and (min(picked) < 0 or max(picked) >= n_candidates):
         raise ValueError(f'the selection has an index outside the {n_candidates} candidates')
     return picked
+
+
+def cluster_features(features: np.ndarray, n_clusters: int, seed: int, minibatch_threshold: int, minibatch_size: int) -> np.ndarray:
+    """K-means as the TypiClust and ProbCover papers run it: the exact algorithm up to
+    `minibatch_threshold` clusters, mini-batch k-means above it. Callers wrap it in threadpool_limits(1)."""
+    if n_clusters <= minibatch_threshold:
+        model = KMeans(n_clusters=n_clusters, random_state=seed)
+    else:
+        model = MiniBatchKMeans(n_clusters=n_clusters, batch_size=minibatch_size, random_state=seed)
+    return model.fit_predict(features)
 
 
 def load_feature_table(path: str, n_samples: int) -> np.ndarray:
