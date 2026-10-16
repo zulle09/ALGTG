@@ -48,7 +48,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument('-mp', '--master_port', type=str, required=False, default='12355', help='Master port for distributed training')
     parser.add_argument('-m', '--methods', type=str, nargs='+', required=True, choices=[
             'random', 'entropy', 'coreset', 'badge', 'bald', 'cdal', 'tavaal', 'alphamix', 'tidal',
-            'uncertaingcn', 'coregcn',
+            'uncertaingcn', 'coregcn', 'typiclust',
             'll', 'gtg', 'll_gtg', 'llmlp_gtg', 'lsmlps_gtg', 'lsmlpsA_gtg', 'lstmreg_gtg', 'lstmbc_gtg'
         ], help='Possible methods to choose')
     parser.add_argument('-ds', '--datasets', type=str, nargs='+', required=True, choices=['cifar10', 'cifar100', 'svhn', 'fmnist', 'caltech256', 'tinyimagenet'],
@@ -73,6 +73,14 @@ def get_args() -> argparse.Namespace:
                              'entropy-history plots, per-sample labelled image dumps). OFF by default: they can '
                              'dominate the wall-clock of a full benchmark run. Accuracy CSVs and train/val '
                              'curves are always written')
+    parser.add_argument('-fs', '--feature_source', type=str, required=False, choices=['model', 'file'], default='model',
+                        help='Features the feature-based competitors (typiclust) cluster and measure distances in. '
+                             'model: the penultimate embedding of the model trained in the current cycle (default, '
+                             'what coreset and badge use). file: precomputed features from -fp, e.g. the '
+                             'self-supervised ones those papers use. A non-default source is part of the strategy name')
+    parser.add_argument('-fp', '--feature_path', type=str, required=False, default=None,
+                        help='With -fs file: a .npy of shape (training set size, D), one row per training sample in '
+                             'the torchvision order of the dataset')
     parser.add_argument('-am', '--affinity_matrix', type=str, nargs='+', required=False, choices=['corr', 'cos_sim', 'rbfk'], default=['corr'], help='Affinity matrix to choose')
     
     parser.add_argument('-am_md', '--affinity_matrix_mixed_distance', type=str, nargs='+', required=False, choices=['LL', 'UU', 'LU', 'UL'], default=['LL'], help='Affinity matrix portion to convert into distance measure')
@@ -109,6 +117,9 @@ def get_args() -> argparse.Namespace:
                              'complete, discard a partial one and re-run it. overwrite: discard and re-run')
 
     args = parser.parse_args()
+
+    if args.feature_source == 'file' and not (args.feature_path and os.path.isfile(args.feature_path)):
+        parser.error('-fs file needs -fp pointing to an existing .npy file')
 
     # Online GTG strategies share one GTGModule whose affinity config is set when each strategy is
     # constructed, and all are constructed before any runs: with several combinations every online
@@ -307,6 +318,7 @@ def main() -> None:
             'master_address': args.master_address, 'master_port': args.master_port,
             'temp_unlab_pool': args.temp_unlab_pool, 'bbone_pre_train': args.bbone_pre_train,
             'diagnostics': args.diagnostics, 'num_workers': args.num_workers,
+            'feature_source': args.feature_source, 'feature_path': args.feature_path,
         }
         
         if args.cold_start_strategy == 'none' and args.bbone_pre_train: raise ValueError('You must specify a cold start strategy to pre-train the backbone')
