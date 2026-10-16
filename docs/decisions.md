@@ -12,6 +12,34 @@ Format:
 
 ---
 
+## 2026-10-16 — TypiClust defaults to the authors' selection rule, not dal-toolbox's (inferred — confirm)
+The brief names dal-toolbox as the source, and its `TypiClust` is ported too (`selection: 'dal'`, golden-tested
+against the original). The default is the rule of the authors' code: dal-toolbox queries the largest cluster
+that holds no labelled point and picks uniformly at random once none is left, and with K capped at 500 and
+B = 1000 that was 72-87 % random picks on synthetic 512-d features (L = 1000...9000), a Random baseline under
+another name. The authors' rule sorts clusters by fewest labelled points, then size, and cycles through them.
+Each variant has its own strategy name.
+Revisit if the main table should show the literal dal-toolbox behaviour, or if real features show the random
+fallback is rare.
+
+## 2026-10-16 — Competitor features: the model's embedding by default, a `.npy` for self-supervised ones
+`-fs model|file` (+ `-fp`). `model` is the penultimate embedding of the current cycle's model, what CoreSet and
+BADGE use (the default the user asked for). `file` reads precomputed features; no SimCLR/SCAN training code is
+copied into the repo (user constraint), so the user produces the file. A strategy on a file is named `..._ssl`:
+rows from different sources must not merge in `results.csv`, and a file is representation learning on the whole
+unlabelled set, which the baselines do not get, so those rows should be reported as a separate group (suffix and
+grouping: inferred — confirm). The file path is not part of the name: use one `-o` per feature file.
+Revisit when real SimCLR features exist and the main table has to pick a group.
+
+## 2026-10-16 — scikit-learn work in competitors runs under `threadpool_limits(1)` (workaround)
+In the first smoke run TypiClust aborted (exit 139, `OMP: Error #179 pthread_mutex_init failed`) inside
+scikit-learn's `euclidean_distances`, a BLAS call, after torch had trained on MPS; with the limit both smoke
+runs pass. The same calls pass in isolation (MPS, DataLoader workers and `OMP_NUM_THREADS` set after the torch
+import, each tried), so which ingredient triggers it is not isolated; the duplicate OpenMP runtimes behind
+`KMP_DUPLICATE_LIB_OK` are the likely cause. One thread also matches the benchmark's intent
+(`OMP_NUM_THREADS=1`) and makes clustering reproducible.
+Revisit if the environment is fixed or the GPU host never shows it; then the limit only costs speed.
+
 ## 2026-09-16 — GTG's NaN-hunting logs move to DEBUG behind `--debug_gtg`
 The gradient hooks and per-replicator-iteration state logs in `GTG_Cls.py` (mirrored in
 `GTG_off.py`) were added to chase weights diverging to NaN, and they work — but each formats a
