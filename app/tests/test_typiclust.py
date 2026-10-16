@@ -9,7 +9,6 @@ which is the only place the reference code is ever run.
     python app/tests/test_typiclust.py    # or: pytest app/tests/test_typiclust.py
 """
 
-import contextlib
 import json
 import os
 import random
@@ -17,7 +16,6 @@ import sys
 import traceback
 import warnings
 from types import SimpleNamespace
-from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
@@ -25,8 +23,8 @@ import numpy as np
 import torch
 from torch.utils.data import Subset
 
-from ActiveLearner import ActiveLearner
 from competitor_config import competitor_params
+from competitor_testing import build_strategy, config
 from strategies.competitors.TypiClust import TypiClust, typicality, typiclust_select
 
 
@@ -252,39 +250,19 @@ def test_bad_cluster_labels_and_selection_are_refused():
 
 
 # ------------------------------------------------------------------ strategy wrapper
-@contextlib.contextmanager
-def config(**overrides):
-    saved = dict(competitor_params['typiclust'])
-    competitor_params['typiclust'].update(overrides)
-    try:
-        yield
-    finally:
-        competitor_params['typiclust'].clear()
-        competitor_params['typiclust'].update(saved)
-
-
-def build_strategy(dataset_name='cifar10', **ct_p):
-    """A real TypiClust, constructed without the heavy ActiveLearner.__init__ (dataset, model, folders)."""
-    def light_init(self, ct_p, t_p, method_name):
-        self.ct_p, self.strategy_name = ct_p, f'ResNet_{method_name}'
-
-    with mock.patch.object(ActiveLearner, '__init__', light_init):
-        return TypiClust({'dataset_name': dataset_name, 'trial': 0, **ct_p}, {})
-
-
 def test_strategy_name_encodes_what_changes_the_numbers():
-    assert build_strategy().strategy_name == 'ResNet_TypiClust'
-    assert build_strategy(feature_source='file').strategy_name == 'ResNet_TypiClust_ssl'
-    with config(selection='dal'):
-        assert build_strategy().strategy_name == 'ResNet_TypiClust_dal'
-        assert build_strategy(feature_source='file').strategy_name == 'ResNet_TypiClust_dal_ssl'
+    assert build_strategy(TypiClust).strategy_name == 'ResNet_TypiClust'
+    assert build_strategy(TypiClust, feature_source='file').strategy_name == 'ResNet_TypiClust_ssl'
+    with config('typiclust', selection='dal'):
+        assert build_strategy(TypiClust).strategy_name == 'ResNet_TypiClust_dal'
+        assert build_strategy(TypiClust, feature_source='file').strategy_name == 'ResNet_TypiClust_dal_ssl'
 
 
 def test_max_clusters_follows_the_paper_per_dataset():
-    assert build_strategy('cifar10').params['max_clusters'] == 500
-    assert build_strategy('cifar100').params['max_clusters'] == 500
-    assert build_strategy('tinyimagenet').params['max_clusters'] == 1000
-    assert 'max_clusters_by_dataset' not in build_strategy().params
+    assert build_strategy(TypiClust, 'cifar10').params['max_clusters'] == 500
+    assert build_strategy(TypiClust, 'cifar100').params['max_clusters'] == 500
+    assert build_strategy(TypiClust, 'tinyimagenet').params['max_clusters'] == 1000
+    assert 'max_clusters_by_dataset' not in build_strategy(TypiClust).params
     assert 'max_clusters_by_dataset' in competitor_params['typiclust'], 'the shared config must not be modified'
 
 
@@ -295,8 +273,8 @@ def test_query_maps_pool_positions_to_dataset_indices_and_avoids_the_labelled_se
     pool_indices = [int(index) for index in np.random.default_rng(0).permutation(np.arange(5000, 5000 + len(pool)))]
     labelled_indices = [int(row) for row in labelled_rows]
 
-    with config(l2_normalize=False):
-        strategy = build_strategy()
+    with config('typiclust', l2_normalize=False):
+        strategy = build_strategy(TypiClust)
     strategy.dataset, strategy.iter, strategy.labelled_indices = SimpleNamespace(dataset_id=1), 2, labelled_indices
     strategy.get_features = lambda subset: (labelled, pool)
 
@@ -315,7 +293,7 @@ def test_query_with_a_pool_smaller_than_the_budget_returns_the_whole_pool():
     labelled, pool, _, _ = split(features, cluster_ids, [0, 1, 2])
     pool_indices = list(range(100, 100 + len(pool)))
 
-    strategy = build_strategy()
+    strategy = build_strategy(TypiClust)
     strategy.dataset, strategy.iter, strategy.labelled_indices = SimpleNamespace(dataset_id=1), 1, [0, 1, 2]
     strategy.get_features = lambda subset: (labelled, pool)
 
