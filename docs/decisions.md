@@ -12,6 +12,26 @@ Format:
 
 ---
 
+## 2026-10-16 — BAIT is implemented from the paper, not translated from dal-toolbox (inferred — confirm)
+dal-toolbox's `bait.py` has no attribution but mirrors the licence-less `JordanAsh/badge` code identifier by
+identifier and comment by comment, so a translation (with dal-toolbox's BSD notice) would carry that provenance
+and BSD cannot launder it. The alternatives were to translate anyway, to translate the badge file (no licence at
+all), or to skip BAIT. The port is written from the paper's equations with a different formulation (Kronecker-
+structured factors, rank-r updates of the per-candidate scores), and both reference files are used only as
+numerical oracles in tests. dal-toolbox's version also has a scale bug (one Fisher mean per batch of 32, which
+inflates the labelled prior by ceil(L / 32)) that the badge code does not.
+Revisit if the dal-toolbox authors or the BADGE author confirm a licence that covers the code.
+
+## 2026-10-16 — BAIT's exact Fisher runs only where it fits; the approximation is a separate, named variant
+The softmax Fisher has dimension C*D: the inverse is 210 MB at C = 10 and 21 GB at C = 100, and the reference
+embeddings alone are 205 GB. `fisher: 'ce'` is refused at construction above `max_embedding_dim` (12,000), which
+leaves CIFAR-10, SVHN and Fashion-MNIST, with the way out in the message. `fisher: 'bce'` (dal-toolbox's Bernoulli
+likelihood on the top probability, dimension D for any C) runs everywhere and is named `ResNet_BAIT_bce`. The
+alternatives were a silent fall-back (changes the algorithm without saying so in the results), subsampling the
+classes or the pool (the paper does neither), or skipping BAIT on the other datasets.
+Revisit when the exact variant is needed for 100+ classes; that needs a GPU with tens of GB and a Kronecker-
+factored inverse, not this formulation.
+
 ## 2026-10-16 — ProbCover's radius is the paper's purity rule, re-estimated on every query
 `delta: None` in `competitor_config.py`. The alternatives were a fixed radius, dal-toolbox's default of 0.6 or the
 authors' 0.5-0.6 per dataset, which belong to L2-normalised SimCLR features and mean nothing on a supervised

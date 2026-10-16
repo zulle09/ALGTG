@@ -10,12 +10,15 @@ scikit-learn; no reference repository is imported at runtime. Hyperparameters li
 |---|---|---|---|---|---|
 | `typiclust` | Hacohen, Dekel, Weinshall, *Active Learning on a Budget: Opposite Strategies Suit High and Low Budgets*, ICML 2022, [arXiv 2202.02794](https://arxiv.org/abs/2202.02794). Official code, linked in the abstract: [avihu111/TypiClust](https://github.com/avihu111/TypiClust) | dal-toolbox `typiclust.py`, `randomclust.py` @`13ee9ca`; authors' `deep-al/pycls/al/typiclust.py` @`4097a71` | features of labelled + candidates; no logits, no labels | 4-6 s, one thread (N = 10k, L <= 9k, D = 512) | BSD-3-Clause (dal-toolbox), MIT (authors) |
 | `probcover` | Yehuda, Dekel, Hacohen, Weinshall, *Active Learning Through a Covering Lens*, NeurIPS 2022, [arXiv 2205.11320](https://arxiv.org/abs/2205.11320). Official code, linked in the abstract: [avihu111/TypiClust](https://github.com/avihu111/TypiClust) | dal-toolbox `prob_cover.py` @`13ee9ca`; the authors' copy in `uherding` `deep-al/pycls/al/prob_cover.py` @`75299cd` (comparison and test oracle only) | features of labelled + candidates; no logits, no labels | 0.7-1.8 s (N = 10k, L <= 9k, D = 512; 100 MB boolean graph) | BSD-3-Clause (dal-toolbox), MIT (authors) |
+| `bait`, `bait_bce` | Ash, Goel, Krishnamurthy, Kakade, *Gone Fishing: Neural Active Learning with Fisher Embeddings*, NeurIPS 2021, [arXiv 2106.09675](https://arxiv.org/abs/2106.09675). The abstract has no code link; the authors' classification code is in [JordanAsh/badge](https://github.com/JordanAsh/badge) (its README), which has no licence | Written from the paper. dal-toolbox `bait.py` @`13ee9ca` and badge `bait_sampling.py` @`a2d18ac` are numerical oracles only | the trained model's own penultimate features and logits (no `-fs file`) | `bait`: about 4 min on one CPU core (N = 10k, L <= 9k, C = 10, 1.9 GB); `bait_bce`: 7 s | none: no code is taken from either reference, see below |
 
 ## Running
 
 ```
 python app/main.py -gpus 1 -m typiclust probcover -ds cifar10 -tr 5                # model features (default)
 python app/main.py -gpus 1 -m probcover -ds cifar10 -tr 5 -fs file -fp feats.npy   # precomputed features
+python app/main.py -gpus 1 -m bait bait_bce -ds cifar10 -tr 5                      # bait: 10-class datasets only
+python app/main.py -gpus 1 -m bait_bce -ds cifar100 -tr 5                          # the approximation runs anywhere
 ```
 
 **Feature source (`-fs`, `-fp`).** `model` (default) clusters and measures distances in the penultimate
@@ -24,7 +27,8 @@ reads a `.npy` of shape `(training set size, D)`, one row per training sample in
 order, for the self-supervised features the papers use. This repository does not train them. A strategy run
 on a file is named `..._ssl` so its rows never merge with the model-feature run in `results.csv`; the file
 itself is not part of the name, so use one `-o` per feature file. A feature file is representation learning
-on the whole unlabelled set, which the baselines do not get: report `_ssl` rows as a separate group.
+on the whole unlabelled set, which the baselines do not get: report `_ssl` rows as a separate group. BAIT is the
+exception: it needs the trained model's own features and logits, and refuses `-fs file`.
 
 ## TypiClust
 
@@ -146,6 +150,78 @@ python app/tests/golden/make_probcover_golden.py --dal-toolbox <dal-toolbox clon
 
 which requires the two reference implementations to agree with each other and with the plain-loop greedy
 before it writes anything. Smoke: `python app/tests/smoke_run.py probcover [-fs file -fp feats.npy]`.
+
+## BAIT
+
+**What the paper used.** BAIT picks the batch S that minimises `tr((sum of the Fisher information of S)^-1 F)`,
+where the Fisher information is that of the last layer: for a softmax layer, `I(x) = x x^T (x) (diag(p) - p p^T)`
+(App. A.2). It is greedy: a forward pass adds `2B` candidates, each the one that lowers the trace most (an
+oversampling factor of two, chosen for computational reasons), then a backward pass removes `B` of them; the
+trace is evaluated with the Woodbury identity so that all candidates are scored at once. The prior is
+`lambda I` plus the labelled set's Fisher. `lambda` is 0.01 on CIFAR-10 and 1 elsewhere. The classification
+experiments are on MNIST, OpenML #155, SVHN and CIFAR-10, with an MLP and a ResNet-18.
+
+| Parameter | Value | Source |
+|---|---|---|
+| `fisher` | `ce` for `bait`, `bce` for `bait_bce` | App. A.2; dal-toolbox `grad_likelihood` |
+| `lambda_reg` | 1; 0.01 on CIFAR-10 | paper App. C; the BADGE-repo runner (`lamb = 1`, `1e-2` for CIFAR) |
+| `oversample` | 2 | paper Alg. 1; both reference codes |
+| `max_embedding_dim` | 12,000 | memory guard, not from the paper |
+| `device` | `cpu` (`cuda` is much faster; float64 either way) | |
+
+**Deviations from the paper / the reference code.**
+
+1. **Not a translation.** dal-toolbox's `bait.py` has no attribution but mirrors the licence-less BADGE-repo
+   code identifier by identifier and comment by comment, so the port is written from the paper's equations and
+   both files are numerical oracles only. The formulation is different: a sample's factor is the Kronecker
+   product `X = A (x) phi^T`, so the `(C x C*D)` embeddings are never built (they are 7.8 GB at C = 10 and 205 GB
+   at C = 100 in the references), and each candidate's two `(rank x rank)` score matrices are updated by
+   rank-`r` corrections instead of being recomputed against the `(C*D x C*D)` inverse at every step. It is still
+   exact: it picks what an implementation with explicit matrices and explicit inverses picks.
+2. **Fisher scale.** Both codes weight the labelled Fisher by `L / (L + B)` and each candidate by `B / (L + B)`,
+   with `F` the mean over labelled and candidates; the port does the same. (The scale of `F` itself cannot change
+   a pick: every score is linear in it.) dal-toolbox adds one mean per batch of 32 samples, which inflates the
+   labelled prior by `ceil(L / 32)`, 32 at L = 1000 and 282 at L = 9000, and so changes the picks; the golden run
+   sets `fisher_batch_size` above the data size to get true means.
+3. **Feasibility.** The exact Fisher matrix is `C*D` square: 210 MB at C = 10, 21 GB at C = 100. `bait` is refused
+   at construction above `max_embedding_dim`, which leaves CIFAR-10, SVHN and Fashion-MNIST.
+   `bait_bce` is dal-toolbox's `grad_likelihood='binary_cross_entropy'`: a Bernoulli likelihood on the top class
+   probability, rank 2 and dimension `D` for any number of classes. It is an approximation, not the paper's
+   Fisher, and its rows are named `ResNet_BAIT_bce`. The other approximations of dal-toolbox's class (top-k
+   expectation, diagonal Fisher, a subset of the gradient coordinates, one-shot top-k selection), which is what
+   the Fast Fishing publication builds on, are not ported.
+4. **No paper value** for `lambda` on CIFAR-100, Tiny-ImageNet, Fashion-MNIST or Caltech256: 1.
+5. **Candidate pool.** 10,000 candidates; `F` is averaged over labelled and candidates, as in both codes.
+6. **Edge cases.** An empty labelled set, a pool smaller than `2B` and `B >= N` work; dal-toolbox fails or returns
+   duplicates there (its model wrapper returns nothing for an empty set, and the `isinf` clamp has no
+   counterpart in the backward pass). The port runs in float64, and a non-finite score raises instead of
+   steering the pick.
+7. Ties go to the lowest index in the forward pass and to the earliest selected in the backward pass.
+8. There is no randomness; no generator is used.
+9. `-fs file` is refused: the Fisher information belongs to the trained model's own last layer.
+
+**Cost.** Measured on this Mac, CPU, float64, N = 10,000, B = 1,000, D = 512 (3,000 greedy steps, about 0.07 s each):
+`bait` at C = 10 takes 236 s at L = 1,000 and 228 s at L = 9,000, peak 1.9 GB; `bait_bce` takes 7.2 s at C = 100 and
+6.7 s at C = 256, peak about 1 GB. A sweep of 5 trials x 9 queries is about 3 h per 10-class dataset on one core.
+The steps are memory-bound on the `(C*D)` square inverse, so `device: 'cuda'` should be much faster, but it has not
+been run here (`BAIT_TEST_DEVICE=cuda python app/tests/test_bait.py` checks it in seconds). For comparison, by
+estimate the reference formulation costs about 2e13 FLOP per greedy step at C = 10 (4.5e16 per query) and cannot be
+run at C = 100.
+
+**Tests.** `app/tests/test_bait.py`: the selection against `app/tests/golden/dense_bait.py` (explicit matrices,
+explicit inverses, the trace objective re-evaluated for every candidate at every step) for both Fishers, with
+and without labelled data and for several budgets and oversampling factors (including `2B > N`); the Fisher
+factors against the softmax formula and against explicit Kronecker embeddings; the projection and quadratic
+forms; saturated probabilities; ties; validation; the name, the per-dataset `lambda` and the refusals; and the
+golden test against dal-toolbox on `app/tests/golden/bait_golden.json`, produced by
+
+```
+python app/tests/golden/make_bait_golden.py --dal-toolbox <dal-toolbox clone>
+```
+
+which requires the reference to agree with the dense implementation and searches for a fixture without a
+near-tie at any greedy step. `BAIT_TEST_DEVICE=cuda python app/tests/test_bait.py` runs the same tests on a GPU.
+Smoke: `python app/tests/smoke_run.py bait` (and `bait_bce`).
 
 ## Not ported
 
