@@ -12,6 +12,25 @@ Format:
 
 ---
 
+## 2026-10-16 — ProbCover's radius is the paper's purity rule, re-estimated on every query
+`delta: None` in `competitor_config.py`. The alternatives were a fixed radius, dal-toolbox's default of 0.6 or the
+authors' 0.5-0.6 per dataset, which belong to L2-normalised SimCLR features and mean nothing on a supervised
+embedding that changes every cycle, and dal-toolbox's `estimate_delta`, which is never called and is wrong. The
+paper's criterion (largest radius with 95 % pure balls against k-means pseudo-labels, k = number of classes) is
+solved exactly as an order statistic, not on a grid. A fixed radius stays available and is part of the strategy
+name (`..._d0.55`), as is a different alpha (`..._a0.9`).
+Revisit if real embeddings saturate (the labelled set covering every candidate turns the whole query into the
+random tail), or if self-supervised features become the main setting and the authors' fixed values are wanted.
+
+## 2026-10-16 — When ProbCover has nothing left to cover, the rest of the query is seeded random (inferred — confirm)
+Both reference codes repeat index 0 then: a duplicate and, whenever there is a labelled sample, a labelled one,
+which `update_sets` rejects, so something else had to be chosen and the paper does not say what. Random draws from
+the unselected candidates are the least inventive option; the alternatives were the highest static degree first
+(redundant, dense regions) or covering the pool again with the selected points excluded (a procedure the paper does
+not have). The number of random picks is logged on every query.
+Revisit if saturation is common on real features: then a method designed for all budgets (UHerding, MaxHerding) is
+the better comparison, or the fallback needs a principled replacement.
+
 ## 2026-10-16 — TypiClust defaults to the authors' selection rule, not dal-toolbox's (inferred — confirm)
 The brief names dal-toolbox as the source, and its `TypiClust` is ported too (`selection: 'dal'`, golden-tested
 against the original). The default is the rule of the authors' code: dal-toolbox queries the largest cluster

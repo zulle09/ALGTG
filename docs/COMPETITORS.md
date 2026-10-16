@@ -9,12 +9,13 @@ scikit-learn; no reference repository is imported at runtime. Hyperparameters li
 | `-m` | Paper | Ported from | Inputs | Cost per query | Licence of the source |
 |---|---|---|---|---|---|
 | `typiclust` | Hacohen, Dekel, Weinshall, *Active Learning on a Budget: Opposite Strategies Suit High and Low Budgets*, ICML 2022, [arXiv 2202.02794](https://arxiv.org/abs/2202.02794). Official code, linked in the abstract: [avihu111/TypiClust](https://github.com/avihu111/TypiClust) | dal-toolbox `typiclust.py`, `randomclust.py` @`13ee9ca`; authors' `deep-al/pycls/al/typiclust.py` @`4097a71` | features of labelled + candidates; no logits, no labels | 4-6 s, one thread (N = 10k, L <= 9k, D = 512) | BSD-3-Clause (dal-toolbox), MIT (authors) |
+| `probcover` | Yehuda, Dekel, Hacohen, Weinshall, *Active Learning Through a Covering Lens*, NeurIPS 2022, [arXiv 2205.11320](https://arxiv.org/abs/2205.11320). Official code, linked in the abstract: [avihu111/TypiClust](https://github.com/avihu111/TypiClust) | dal-toolbox `prob_cover.py` @`13ee9ca`; the authors' copy in `uherding` `deep-al/pycls/al/prob_cover.py` @`75299cd` (comparison and test oracle only) | features of labelled + candidates; no logits, no labels | 0.7-1.8 s (N = 10k, L <= 9k, D = 512; 100 MB boolean graph) | BSD-3-Clause (dal-toolbox), MIT (authors) |
 
 ## Running
 
 ```
-python app/main.py -gpus 1 -m typiclust -ds cifar10 -tr 5                          # model features (default)
-python app/main.py -gpus 1 -m typiclust -ds cifar10 -tr 5 -fs file -fp feats.npy   # precomputed features
+python app/main.py -gpus 1 -m typiclust probcover -ds cifar10 -tr 5                # model features (default)
+python app/main.py -gpus 1 -m probcover -ds cifar10 -tr 5 -fs file -fp feats.npy   # precomputed features
 ```
 
 **Feature source (`-fs`, `-fp`).** `model` (default) clusters and measures distances in the penultimate
@@ -84,6 +85,68 @@ python app/tests/golden/make_typiclust_golden.py --dal-toolbox <dal-toolbox clon
 
 Smoke: `python app/tests/smoke_run.py typiclust [-fs file -fp feats.npy]`.
 
+## ProbCover
+
+**What the paper used.** Features: SimCLR trained with SCAN's code (500 epochs, ResNet-18, 128-d projection
+head), the 512-d penultimate layer; DINO ViT-S/16 for ImageNet. The authors' code L2-normalises the features.
+Radius `delta`: the largest value at which at least `alpha = 0.95` of the balls are pure, purity being
+measured against k-means pseudo-labels with k = the number of classes; the authors' scripts then run with fixed
+radii of 0.5-0.6 depending on the dataset. Graph: every point points at the points inside its ball (the text
+writes `<=`, both codes `<`). Selection: drop the points the labelled set already covers, then repeatedly take
+the candidate whose ball holds the most uncovered points. Aimed at the low-budget regime, a budget about the
+size of the number of classes.
+
+| Parameter | Value | Source |
+|---|---|---|
+| `delta` | `None`: the purity rule below. A number fixes it and is part of the name, `ResNet_ProbCover_d<delta>` | paper Sec. 3 |
+| `purity_threshold` | 0.95 (a different value is part of the name, `..._a<alpha>`) | paper |
+| `l2_normalize` | on | authors' code |
+| `minibatch_threshold`, `minibatch_size` | 50, 5000 | pseudo-label k-means, same convention as TypiClust |
+
+**Deviations from the paper / the reference code.**
+
+1. **Radius.** Re-estimated on the features of every query with the paper's purity rule: supervised embeddings
+   change every cycle, and the fixed 0.5-0.6 of the authors' scripts belong to L2-normalised SimCLR features
+   (dal-toolbox's default of 0.6 is the same kind of value). It is computed exactly: the ball around x is pure
+   precisely when `delta` is at most the distance from x to the nearest point of another cluster, so the radius
+   is an order statistic of those distances and needs no search grid. dal-toolbox's `estimate_delta` is never
+   called and is wrong (grid [1, 20]; purity read from a row-major edge list that does not start each row with
+   the self-loop).
+2. **Coverage universe.** The 10,000 candidates; the labelled set only removes what it covers. The paper covers
+   the whole unlabelled set.
+3. **Features.** As for TypiClust: the supervised embedding by default, `-fs file` for SimCLR/DINO.
+4. **Regime and saturation.** `L >= 1000` and `B = 1000` is far above the low budgets ProbCover targets. On
+   synthetic class-structured 512-d features the purity radius made the labelled set cover 100 % of the
+   candidates when classes were well separated (all 1000 picks random) and 12-88 % when they overlapped.
+   Whether real ResNet-18 embeddings saturate is open: every query logs the radius, the labelled coverage and
+   the number of random picks to `exp_log.log`.
+5. **Once everything is covered** both references return index 0 for every remaining pick: a duplicate, and a
+   labelled sample whenever there is one (reproduced in the golden fixture), which `update_sets` rejects. The
+   port draws the rest from the unselected candidates with the seeded generator.
+6. **Last rows of the graph.** Both references loop over `range(n // batch_size)`, so the last
+   `n mod batch_size` nodes never get out-edges (batch 500 in dal-toolbox, 1536 in the authors' copy). The port
+   covers every row; the golden fixture runs the references with a single batch.
+7. **dal-toolbox's own header says "It is currently not working correctly"**, and its `query` calls
+   `model.get_representations`, which its `BaseModule` lacks. The port is checked against it under stubs,
+   against the authors' copy and against an independent plain-loop greedy; the three agree on every scenario.
+8. Ties go to the lowest index, as in both codes. A dal-toolbox comment says the paper randomises the pick among
+   the top-ranked nodes; neither code does, and the port does not.
+9. **Randomness.** The pseudo-label k-means and the random tail draw from a generator seeded by
+   (dataset, trial, cycle, strategy name); the global RNGs are never read or advanced.
+
+**Tests.** `app/tests/test_probcover.py`: the radius against a brute-force purity count, the greedy cover
+against a plain-loop implementation for several block sizes, strict versus non-strict balls (for the graph and
+for the labelled set), a tiny radius, exhaustion, determinism and untouched global RNGs, budget above the pool,
+pool-position mapping, registration. The golden test compares the first picks of every scenario of
+`app/tests/golden/probcover_golden.json`, produced by
+
+```
+python app/tests/golden/make_probcover_golden.py --dal-toolbox <dal-toolbox clone> --uherding <uherding clone>
+```
+
+which requires the two reference implementations to agree with each other and with the plain-loop greedy
+before it writes anything. Smoke: `python app/tests/smoke_run.py probcover [-fs file -fp feats.npy]`.
+
 ## Not ported
 
 - **BADGE, BALD, CoreSet** are already in the benchmark (`strategies/competitors/`).
@@ -103,7 +166,7 @@ This repository is Apache-2.0. Ported files keep the notices of what they were p
 |---|---|---|
 | `dal-toolbox` (dhuseljic) | BSD-3-Clause, (c) 2020 The dal_toolbox developers | Keep the notice, conditions and disclaimer in the source; no endorsement by the holders' names |
 | `avihu111/TypiClust` | MIT, (c) 2022 Avihu Dekel and Guy Hacohen | Keep the notice |
-| `uherding` (BorealisAI) | CC BY-NC-SA 4.0 | NonCommercial, and adaptations must be shared under the same licence: UHerding / MaxHerding ports would be adapted material |
+| `uherding` (BorealisAI) | CC BY-NC-SA 4.0 | NonCommercial, and adaptations must be shared under the same licence: UHerding / MaxHerding ports would be adapted material. The ProbCover golden generator runs its copy of the authors' file as a test oracle; no code from it is in this repository, only numbers in a JSON |
 | `uherding/scan` | CC BY-NC 4.0 | NonCommercial; not ported (no SimCLR / SCAN training code is copied) |
 | `badge` (JordanAsh) | none found (no licence file, no notice in any source or README) | All rights reserved by default: nothing is ported from it |
 | `TAILOR` (jifanz) | MIT, (c) 2023 Jifan Zhang | Not ported |
