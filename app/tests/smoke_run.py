@@ -9,7 +9,7 @@ The AL protocol is shrunk so a cycle takes seconds. The sizes keep the GTG-onlin
 alignment valid (init_lab_obs == unlab_sample_dim / al_iters, and n_top_k_obs == init_lab_obs),
 which is what the assertion in Cls_TrainWorker checks.
 
-    python app/tests/smoke_run.py <method>          # one method, isolated
+    python app/tests/smoke_run.py <method> [main.py flags]   # one method, isolated; e.g. -fs file -fp feats.npy
     for m in random entropy coreset ...; do python app/tests/smoke_run.py $m || echo FAIL $m; done
 """
 
@@ -30,7 +30,7 @@ def main() -> None:
     if len(sys.argv) < 2:
         print(__doc__)
         raise SystemExit(2)
-    method = sys.argv[1]
+    method, extra_args = sys.argv[1], sys.argv[2:]
 
     al_params.update(SMOKE_AL)
     cls_config["epochs"] = 1
@@ -39,7 +39,7 @@ def main() -> None:
     sys.argv = [
         "main.py", "-gpus", "1", "-m", method, "-ds", DATASET, "-tr", "1",
         "-bsgtgo", str(SMOKE_BSGTGO), "-am", "corr", "-am_ts", "mean",
-    ]
+    ] + extra_args
 
     import main as app_main
     app_main.main()
