@@ -20,4 +20,16 @@ competitor_params = {
         'minibatch_threshold': 50,         # KMeans if K <= 50, MiniBatchKMeans otherwise
         'minibatch_size': 5000,            # official code: MiniBatchKMeans(batch_size=5000)
     },
+    'probcover': {
+        # Yehuda, Dekel, Hacohen and Weinshall, NeurIPS 2022 (arXiv 2205.11320).
+        # None: the paper's rule, the largest radius at which `purity_threshold` of the balls are pure with
+        #       k-means pseudo-labels (k = number of classes), re-estimated on the features of every query.
+        # float: a fixed radius. The authors' scripts use 0.5-0.6 for L2-normalised SimCLR features
+        #       (tools/scripts/run_budget.sh of the uherding copy), dal-toolbox's default is 0.6.
+        'delta': None,
+        'purity_threshold': 0.95,          # alpha, Sec. 3
+        'l2_normalize': True,              # the authors' code L2-normalises the features
+        'minibatch_threshold': 50,         # pseudo-label k-means: exact up to 50 clusters, mini-batch above
+        'minibatch_size': 5000,
+    },
 }

@@ -48,7 +48,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument('-mp', '--master_port', type=str, required=False, default='12355', help='Master port for distributed training')
     parser.add_argument('-m', '--methods', type=str, nargs='+', required=True, choices=[
             'random', 'entropy', 'coreset', 'badge', 'bald', 'cdal', 'tavaal', 'alphamix', 'tidal',
-            'uncertaingcn', 'coregcn', 'typiclust',
+            'uncertaingcn', 'coregcn', 'typiclust', 'probcover',
             'll', 'gtg', 'll_gtg', 'llmlp_gtg', 'lsmlps_gtg', 'lsmlpsA_gtg', 'lstmreg_gtg', 'lstmbc_gtg'
         ], help='Possible methods to choose')
     parser.add_argument('-ds', '--datasets', type=str, nargs='+', required=True, choices=['cifar10', 'cifar100', 'svhn', 'fmnist', 'caltech256', 'tinyimagenet'],
@@ -74,7 +74,7 @@ def get_args() -> argparse.Namespace:
                              'dominate the wall-clock of a full benchmark run. Accuracy CSVs and train/val '
                              'curves are always written')
     parser.add_argument('-fs', '--feature_source', type=str, required=False, choices=['model', 'file'], default='model',
-                        help='Features the feature-based competitors (typiclust) cluster and measure distances in. '
+                        help='Features the feature-based competitors (typiclust, probcover) cluster and measure distances in. '
                              'model: the penultimate embedding of the model trained in the current cycle (default, '
                              'what coreset and badge use). file: precomputed features from -fp, e.g. the '
                              'self-supervised ones those papers use. A non-default source is part of the strategy name')
