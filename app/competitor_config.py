@@ -32,4 +32,17 @@ competitor_params = {
         'minibatch_threshold': 50,         # pseudo-label k-means: exact up to 50 clusters, mini-batch above
         'minibatch_size': 5000,
     },
+    'bait': {
+        # Ash, Goel, Krishnamurthy and Kakade, NeurIPS 2021 (arXiv 2106.09675). Needs the trained model's own
+        # penultimate features and logits, so it has no -fs file mode.
+        # `bait` is the Fisher information of the softmax last layer, dimension C*D (the paper's BAIT). Exact, and
+        # only feasible for few classes: the (C*D x C*D) matrix is 210 MB at C = 10, 21 GB at C = 100.
+        # `bait_bce` is dal-toolbox's grad_likelihood='binary_cross_entropy', a Bernoulli likelihood on the top
+        # class probability, dimension D whatever C is. An approximation, not the paper's Fisher.
+        'lambda_reg': 1.0,                 # lambda = 1 in the paper's experiments except CIFAR-10 (App. C; badge run.py)
+        'lambda_by_dataset': {'cifar10': 0.01},
+        'oversample': 2,                   # 2B forward steps, then B backward removals (Alg. 1)
+        'max_embedding_dim': 12000,        # refuse a larger Fisher matrix instead of running out of memory mid-sweep
+        'device': 'cpu',                   # 'cuda' is much faster; the linear algebra is float64 either way
+    },
 }

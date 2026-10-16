@@ -17,6 +17,7 @@ from strategies.competitors.AlphaMix import AlphaMix
 from strategies.competitors.TiDAL import TiDAL
 from strategies.competitors.TypiClust import TypiClust
 from strategies.competitors.ProbCover import ProbCover
+from strategies.competitors.BAIT import BAIT, BAIT_bce
 from strategies.gtg.GTG import GTG
 from strategies.gtg.GTG_off import GTG_off
 
@@ -86,6 +87,7 @@ dict_strategies_BB = dict(
     bald = BALD, cdal = CDAL, alphamix = AlphaMix, # -> BB
     uncertaingcn = UncertainGCN, coregcn = CoreGCN, # -> BB (Sequential GCN, graph-based)
     typiclust = TypiClust, probcover = ProbCover, # -> BB (penultimate or file features)
+    bait = BAIT, bait_bce = BAIT_bce, # -> BB (penultimate features and logits of the trained model)
 )
 
 # to create the strategy objects based on the methods list
@@ -157,7 +159,7 @@ def get_strategies_object(
     strategies: List[
         Random | Entropy | CoreSet | AlphaMix | BADGE | BALD | CDAL
         | GTG_off | LearningLoss | GTG_off | TiDAL | TA_VAAL | GTG
-        | UncertainGCN | CoreGCN | TypiClust | ProbCover
+        | UncertainGCN | CoreGCN | TypiClust | ProbCover | BAIT | BAIT_bce
     ] = []
     
     for method in methods:

@@ -48,7 +48,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument('-mp', '--master_port', type=str, required=False, default='12355', help='Master port for distributed training')
     parser.add_argument('-m', '--methods', type=str, nargs='+', required=True, choices=[
             'random', 'entropy', 'coreset', 'badge', 'bald', 'cdal', 'tavaal', 'alphamix', 'tidal',
-            'uncertaingcn', 'coregcn', 'typiclust', 'probcover',
+            'uncertaingcn', 'coregcn', 'typiclust', 'probcover', 'bait', 'bait_bce',
             'll', 'gtg', 'll_gtg', 'llmlp_gtg', 'lsmlps_gtg', 'lsmlpsA_gtg', 'lstmreg_gtg', 'lstmbc_gtg'
         ], help='Possible methods to choose')
     parser.add_argument('-ds', '--datasets', type=str, nargs='+', required=True, choices=['cifar10', 'cifar100', 'svhn', 'fmnist', 'caltech256', 'tinyimagenet'],
